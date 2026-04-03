@@ -195,8 +195,8 @@ struct ContentView: View {
                     )
                     .focused($pauseFieldFocused)
                     .onSubmit { commitPauseDuration() }
-                    .onChange(of: pauseFieldFocused) { focused in
-                        if !focused { commitPauseDuration() }
+                    .onChange(of: pauseFieldFocused) {
+                        if !pauseFieldFocused { commitPauseDuration() }
                     }
                     .accessibilityLabel("Pause duration")
                     .accessibilityValue("\(pauseDurationText) seconds")
