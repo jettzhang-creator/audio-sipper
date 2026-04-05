@@ -35,6 +35,8 @@ final class AudioPlaybackManager: NSObject, ObservableObject {
     private var currentIndex: Int = 0
     private var countdownTimer: Timer?
     private var pauseDuration: Int = 3
+    var autoReplay: Bool = false
+    var shuffle: Bool = true
 
     /// The security-scoped URL we must balance start/stop calls for.
     private var activeFolderURL: URL?
@@ -51,9 +53,11 @@ final class AudioPlaybackManager: NSObject, ObservableObject {
     // MARK: - Public Interface
 
     /// Starts a new session. Tears down any existing one first.
-    func startSession(folderURL: URL, recursive: Bool, pauseDuration: Int) {
+    func startSession(folderURL: URL, recursive: Bool, pauseDuration: Int, shuffle: Bool, autoReplay: Bool) {
         tearDown()
         self.pauseDuration = pauseDuration
+        self.shuffle = shuffle
+        self.autoReplay = autoReplay
         activeFolderURL = folderURL
 
         guard folderURL.startAccessingSecurityScopedResource() else {
@@ -67,7 +71,7 @@ final class AudioPlaybackManager: NSObject, ObservableObject {
         // Scan is synchronous; acceptable for local folders at V0 scope.
         // Files are obtained while security scope is active.
         let files = Self.scanAudioFiles(in: folderURL, recursive: recursive)
-        playlist = files.shuffled()
+        playlist = shuffle ? files.shuffled() : files.sorted { $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending }
         currentIndex = 0
 
         guard !playlist.isEmpty else {
@@ -123,6 +127,12 @@ final class AudioPlaybackManager: NSObject, ObservableObject {
 
     private func playCurrentClip() {
         guard currentIndex < playlist.count else {
+            if autoReplay {
+                currentIndex = 0
+                if shuffle { playlist.shuffle() }
+                playCurrentClip()
+                return
+            }
             tearDown()
             state = .finished
             currentFileName = ""

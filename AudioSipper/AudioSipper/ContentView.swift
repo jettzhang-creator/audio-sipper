@@ -14,6 +14,8 @@ struct ContentView: View {
 
     // Settings
     @State private var includeSubfolders: Bool = false
+    @State private var shufflePlayback: Bool = true
+    @State private var autoReplay: Bool = false
     @State private var pauseDurationText: String = "3"
     @State private var lastValidPauseDuration: Int = 3
 
@@ -165,6 +167,39 @@ struct ContentView: View {
             .tint(Color(UIColor.systemBlue))
             .accessibilityLabel("Include subfolders")
             .accessibilityHint(includeSubfolders ? "On. Subfolders will be scanned." : "Off. Only top-level files scanned.")
+
+            divider
+
+            // Shuffle toggle
+            Toggle(isOn: $shufflePlayback) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Shuffle")
+                        .foregroundColor(.primary)
+                    Text("Randomize playback order")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+            }
+            .tint(Color(UIColor.systemBlue))
+            .accessibilityLabel("Shuffle")
+            .accessibilityHint(shufflePlayback ? "On. Clips will play in random order." : "Off. Clips will play in alphabetical order.")
+
+            divider
+
+            // Auto-replay toggle
+            Toggle(isOn: $autoReplay) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Auto-Replay")
+                        .foregroundColor(.primary)
+                    Text("Loop playlist when all clips finish")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+            }
+            .tint(Color(UIColor.systemBlue))
+            .accessibilityLabel("Auto-Replay")
+            .accessibilityHint(autoReplay ? "On. Playlist will loop." : "Off. Playback stops after last clip.")
+            .onChange(of: autoReplay) { player.autoReplay = autoReplay }
 
             divider
 
@@ -322,7 +357,9 @@ struct ContentView: View {
             player.startSession(
                 folderURL: url,
                 recursive: includeSubfolders,
-                pauseDuration: lastValidPauseDuration
+                pauseDuration: lastValidPauseDuration,
+                shuffle: shufflePlayback,
+                autoReplay: autoReplay
             )
         }
     }
