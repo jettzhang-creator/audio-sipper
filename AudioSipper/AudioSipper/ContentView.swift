@@ -519,7 +519,7 @@ struct LongModeView: View {
                 }
             }
 
-            // Playback controls: Previous | Play/Pause | Next
+            // Playback controls: Previous | Play/Pause | Next | Stop
             HStack(spacing: 10) {
                 ControlButton(
                     title: "Previous",
@@ -543,6 +543,14 @@ struct LongModeView: View {
                     style: .secondary,
                     isEnabled: isActive,
                     action: { player.next() }
+                )
+
+                ControlButton(
+                    title: "Stop",
+                    icon: "stop.fill",
+                    style: .secondary,
+                    isEnabled: isActive,
+                    action: { player.stop() }
                 )
             }
         }

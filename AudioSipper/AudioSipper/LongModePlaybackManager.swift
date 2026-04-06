@@ -367,18 +367,42 @@ final class LongModePlaybackManager: NSObject, ObservableObject {
         // Do NOT reset the interval timer on seek — per requirements
     }
 
-    /// Stop session entirely. Clears saved state since user explicitly stopped.
+    /// Stop session entirely — full reset. Nothing from the current session is
+    /// preserved. After this call the manager is back to its initial state and
+    /// the user can change any settings before starting a fresh session.
     func stop() {
+        // 1. Stop audio and release security-scoped resources / timers
         tearDown()
+
+        // 2. Clear saved state so the next launch doesn't attempt resume
         SavedPlaybackState.clear()
-        restoredFromSave = false
+
+        // 3. Clear playlist and file references
+        playlist = []
+        currentIndex = 0
         currentFileURL = nil
+
+        // 4. Reset all published state
         state = .idle
         currentFileName = ""
         currentTime = 0
         duration = 0
         countdownSeconds = 0
         statusMessage = ""
+        restoredFromSave = false
+
+        // 5. Reset internal flags
+        wasPlayingClipWhenPaused = false
+        justStartedPlayback = false
+        elapsedPlaybackSinceLastPause = 0
+        lastProgressTimestamp = 0
+        pendingSeekTime = 0
+
+        // 6. Reset source metadata (sourceType/folder info remain as @AppStorage
+        //    settings in the view — here we only clear the runtime references)
+        sourceType = "folder"
+        sourceFolderName = ""
+        sourceIncludeSubfolders = false
     }
 
     // MARK: - Save / Restore
@@ -728,6 +752,8 @@ extension LongModePlaybackManager: AVAudioPlayerDelegate {
     nonisolated func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
         Task { @MainActor [weak self] in
             guard let self else { return }
+            // If stop() was called, state is .idle and playlist is empty — do nothing.
+            guard self.state != .idle else { return }
             self.stopProgressTimer()
             self.currentIndex += 1
 
