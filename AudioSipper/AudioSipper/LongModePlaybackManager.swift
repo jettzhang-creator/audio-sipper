@@ -130,9 +130,9 @@ final class LongModePlaybackManager: NSObject, ObservableObject {
     private var maxPauseDuration: Int = 30
     private var betweenFilesPause: Int = 5
 
-    // Interval tracking
+    // Interval tracking (wall-clock based so seeking doesn't affect it)
     private var elapsedPlaybackSinceLastPause: TimeInterval = 0
-    private var lastProgressTimestamp: TimeInterval = 0
+    private var lastWallClockTimestamp: CFTimeInterval = 0
 
     // Pause/resume bookkeeping
     private var activeFolderURL: URL?
@@ -196,7 +196,7 @@ final class LongModePlaybackManager: NSObject, ObservableObject {
 
             // Reset interval tracking — fresh timer from this point
             elapsedPlaybackSinceLastPause = 0
-            lastProgressTimestamp = player.currentTime
+            lastWallClockTimestamp = CACurrentMediaTime()
 
             // Reset pause bookkeeping so togglePlayPause works correctly
             wasPlayingClipWhenPaused = true
@@ -395,7 +395,7 @@ final class LongModePlaybackManager: NSObject, ObservableObject {
         wasPlayingClipWhenPaused = false
         justStartedPlayback = false
         elapsedPlaybackSinceLastPause = 0
-        lastProgressTimestamp = 0
+        lastWallClockTimestamp = 0
         pendingSeekTime = 0
 
         // 6. Reset source metadata (sourceType/folder info remain as @AppStorage
@@ -599,12 +599,17 @@ final class LongModePlaybackManager: NSObject, ObservableObject {
 
         guard state == .playing, let player = audioPlayer else { return }
 
+        // Update the seek bar position from the audio player
         currentTime = player.currentTime
-        let now = player.currentTime
-        let delta = now - lastProgressTimestamp
-        lastProgressTimestamp = now
 
-        if delta > 0 {
+        // Track elapsed time using wall clock so seeking doesn't affect it
+        let now = CACurrentMediaTime()
+        let delta = now - lastWallClockTimestamp
+        lastWallClockTimestamp = now
+
+        if delta > 0 && delta < 2.0 {
+            // Only accumulate reasonable deltas (< 2s guards against
+            // large jumps from app suspension or timer drift)
             elapsedPlaybackSinceLastPause += delta
         }
 
@@ -656,7 +661,7 @@ final class LongModePlaybackManager: NSObject, ObservableObject {
 
     private func resumeAfterIntervalPause() {
         guard let player = audioPlayer else { return }
-        lastProgressTimestamp = player.currentTime
+        lastWallClockTimestamp = CACurrentMediaTime()
         justStartedPlayback = true
         player.play()
         state = .playing
@@ -667,9 +672,7 @@ final class LongModePlaybackManager: NSObject, ObservableObject {
 
     private func startProgressTimer() {
         stopProgressTimer()
-        if let player = audioPlayer {
-            lastProgressTimestamp = player.currentTime
-        }
+        lastWallClockTimestamp = CACurrentMediaTime()
         progressTimer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
             guard self != nil else { return }
             Task { @MainActor [weak self] in
