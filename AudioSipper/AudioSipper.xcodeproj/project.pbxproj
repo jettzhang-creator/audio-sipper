@@ -13,6 +13,7 @@
 		BF20AD672F685C8C0073283D /* Preview Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = BF20AD662F685C8C0073283D /* Preview Assets.xcassets */; };
 		BF20AD6F2F685E8B0073283D /* AudioPlaybackManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = BF20AD6D2F685E8B0073283D /* AudioPlaybackManager.swift */; };
 		BF20AD702F685E8B0073283D /* FolderPickerRepresentable.swift in Sources */ = {isa = PBXBuildFile; fileRef = BF20AD6E2F685E8B0073283D /* FolderPickerRepresentable.swift */; };
+		BF20AD712F685E8B0073283D /* LongModePlaybackManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = BF20AD712F685E8B0073283E /* LongModePlaybackManager.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -24,6 +25,7 @@
 		BF20AD662F685C8C0073283D /* Preview Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = "Preview Assets.xcassets"; sourceTree = "<group>"; };
 		BF20AD6D2F685E8B0073283D /* AudioPlaybackManager.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = AudioPlaybackManager.swift; sourceTree = "<group>"; };
 		BF20AD6E2F685E8B0073283D /* FolderPickerRepresentable.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = FolderPickerRepresentable.swift; sourceTree = "<group>"; };
+		BF20AD712F685E8B0073283E /* LongModePlaybackManager.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = LongModePlaybackManager.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -58,6 +60,7 @@
 			children = (
 				BF20AD6D2F685E8B0073283D /* AudioPlaybackManager.swift */,
 				BF20AD6E2F685E8B0073283D /* FolderPickerRepresentable.swift */,
+				BF20AD712F685E8B0073283E /* LongModePlaybackManager.swift */,
 				BF20AD5E2F685C8A0073283D /* AudioSipperApp.swift */,
 				BF20AD602F685C8A0073283D /* ContentView.swift */,
 				BF20AD622F685C8C0073283D /* Assets.xcassets */,
@@ -149,6 +152,7 @@
 				BF20AD612F685C8A0073283D /* ContentView.swift in Sources */,
 				BF20AD5F2F685C8A0073283D /* AudioSipperApp.swift in Sources */,
 				BF20AD6F2F685E8B0073283D /* AudioPlaybackManager.swift in Sources */,
+				BF20AD712F685E8B0073283D /* LongModePlaybackManager.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

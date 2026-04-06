@@ -1,9 +1,86 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 #if os(iOS)
+
+// MARK: - App Mode
+
+enum AppMode: String, CaseIterable {
+    case short = "Short"
+    case long = "Long"
+}
+
+// MARK: - Long Mode Source Type
+
+enum LongModeSource: String, CaseIterable {
+    case file = "Single File"
+    case folder = "Folder"
+}
+
 // MARK: - Root View
 
 struct ContentView: View {
+
+    @State private var appMode: AppMode = .short
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 28) {
+                headerSection
+                modeToggle
+                divider
+
+                switch appMode {
+                case .short:
+                    ShortModeView()
+                case .long:
+                    LongModeView()
+                }
+            }
+            .padding(.horizontal, 20)
+            .padding(.vertical, 24)
+        }
+        .background(Color(UIColor.systemBackground).ignoresSafeArea())
+    }
+
+    // MARK: Header
+
+    private var headerSection: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("Audio Sipper")
+                .font(.largeTitle.bold())
+                .foregroundColor(.primary)
+            Text("Local clip shuffler \u{00B7} no accounts \u{00B7} no cloud")
+                .font(.subheadline)
+                .foregroundColor(.secondary)
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityHeading(.h1)
+    }
+
+    // MARK: Mode Toggle
+
+    private var modeToggle: some View {
+        Picker("Mode", selection: $appMode) {
+            ForEach(AppMode.allCases, id: \.self) { mode in
+                Text(mode.rawValue).tag(mode)
+            }
+        }
+        .pickerStyle(.segmented)
+        .accessibilityLabel("Playback mode")
+    }
+
+    private var divider: some View {
+        Divider()
+            .background(Color(UIColor.separator))
+    }
+}
+
+// MARK: - ============================================================
+// MARK: - SHORT MODE VIEW
+// MARK: - ============================================================
+
+struct ShortModeView: View {
 
     @StateObject private var player = AudioPlaybackManager()
 
@@ -47,29 +124,21 @@ struct ContentView: View {
     }
 
     private var playButtonIcon: String {
-        player.state == .paused ? "play.fill" : "play.fill"
+        "play.fill"
     }
 
     // MARK: Body
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 28) {
-                headerSection
-                divider
-                folderSection
-                settingsSection
-                controlsSection
-                statusSection
-                    .animation(.default, value: player.state)
-                    .animation(.default, value: player.currentFileName)
-                    .animation(.default, value: player.countdownSeconds)
-            }
-            .padding(.horizontal, 20)
-            .padding(.vertical, 24)
+        VStack(alignment: .leading, spacing: 28) {
+            folderSection
+            settingsSection
+            controlsSection
+            statusSection
+                .animation(.default, value: player.state)
+                .animation(.default, value: player.currentFileName)
+                .animation(.default, value: player.countdownSeconds)
         }
-        .background(Color(UIColor.systemBackground).ignoresSafeArea())
-        // Keyboard Done button
         .toolbar {
             ToolbarItemGroup(placement: .keyboard) {
                 Spacer()
@@ -81,33 +150,19 @@ struct ContentView: View {
             }
         }
         .sheet(isPresented: $showFolderPicker) {
-            FolderPickerRepresentable { url in
+            FolderPickerRepresentable(onFolderPicked: { url in
                 selectedFolderURL = url
                 selectedFolderName = url.lastPathComponent
                 showFolderPicker = false
-            }
+            })
             .preferredColorScheme(.dark)
         }
     }
 
     // MARK: - Sections
 
-    private var headerSection: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text("Audio Sipper")
-                .font(.largeTitle.bold())
-                .foregroundColor(.primary)
-            Text("Local clip shuffler · no accounts · no cloud")
-                .font(.subheadline)
-                .foregroundColor(.secondary)
-        }
-        .accessibilityElement(children: .combine)
-        .accessibilityHeading(.h1)
-    }
-
     private var divider: some View {
-        Divider()
-            .background(Color(UIColor.separator))
+        Divider().background(Color(UIColor.separator))
     }
 
     // MARK: Folder
@@ -123,7 +178,7 @@ struct ContentView: View {
                         .accessibilityHidden(true)
 
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(selectedFolderURL == nil ? "Select Folder…" : "Selected Folder")
+                        Text(selectedFolderURL == nil ? "Select Folder\u{2026}" : "Selected Folder")
                             .font(.caption)
                             .foregroundColor(.secondary)
                         Text(selectedFolderURL == nil ? "Tap to choose" : selectedFolderName)
@@ -158,137 +213,48 @@ struct ContentView: View {
         VStack(alignment: .leading, spacing: 16) {
             sectionLabel("Settings", icon: "slider.horizontal.3")
 
-            // Subfolder toggle
             Toggle(isOn: $includeSubfolders) {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Include Subfolders")
-                        .foregroundColor(.primary)
-                    Text("Recursively scan nested folders")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
+                    Text("Include Subfolders").foregroundColor(.primary)
+                    Text("Recursively scan nested folders").font(.caption).foregroundColor(.secondary)
                 }
             }
             .tint(Color(UIColor.systemBlue))
             .accessibilityLabel("Include subfolders")
-            .accessibilityHint(includeSubfolders ? "On. Subfolders will be scanned." : "Off. Only top-level files scanned.")
 
             divider
 
-            // Shuffle toggle
             Toggle(isOn: $shufflePlayback) {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Shuffle")
-                        .foregroundColor(.primary)
-                    Text("Randomize playback order")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
+                    Text("Shuffle").foregroundColor(.primary)
+                    Text("Randomize playback order").font(.caption).foregroundColor(.secondary)
                 }
             }
             .tint(Color(UIColor.systemBlue))
             .accessibilityLabel("Shuffle")
-            .accessibilityHint(shufflePlayback ? "On. Clips will play in random order." : "Off. Clips will play in alphabetical order.")
 
             divider
 
-            // Auto-replay toggle
             Toggle(isOn: $autoReplay) {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Auto-Replay")
-                        .foregroundColor(.primary)
-                    Text("Loop playlist when all clips finish")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
+                    Text("Auto-Replay").foregroundColor(.primary)
+                    Text("Loop playlist when all clips finish").font(.caption).foregroundColor(.secondary)
                 }
             }
             .tint(Color(UIColor.systemBlue))
             .accessibilityLabel("Auto-Replay")
-            .accessibilityHint(autoReplay ? "On. Playlist will loop." : "Off. Playback stops after last clip.")
             .onChange(of: autoReplay) { player.autoReplay = autoReplay }
 
             divider
 
-            // Pause length
-            VStack(alignment: .leading, spacing: 10) {
-                Text("Pause Length")
-                    .foregroundColor(.primary)
-
-                HStack(spacing: 12) {
-                    // Min pause
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("Min Pause")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                        HStack(spacing: 4) {
-                            TextField("10", text: $minPauseText)
-                                .keyboardType(.numberPad)
-                                .multilineTextAlignment(.center)
-                                .frame(width: 60)
-                                .padding(.vertical, 8)
-                                .padding(.horizontal, 10)
-                                .background(Color(UIColor.tertiarySystemBackground))
-                                .cornerRadius(8)
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: 8)
-                                        .stroke(Color(UIColor.separator), lineWidth: 1)
-                                )
-                                .focused($minPauseFieldFocused)
-                                .onSubmit { commitPauseValues() }
-                                .onChange(of: minPauseFieldFocused) {
-                                    if !minPauseFieldFocused { commitPauseValues() }
-                                }
-                                .accessibilityLabel("Minimum pause duration")
-                                .accessibilityValue("\(minPauseText) seconds")
-                            Text("s")
-                                .foregroundColor(.secondary)
-                                .accessibilityHidden(true)
-                        }
-                    }
-
-                    // Max pause
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("Max Pause")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                        HStack(spacing: 4) {
-                            TextField("30", text: $maxPauseText)
-                                .keyboardType(.numberPad)
-                                .multilineTextAlignment(.center)
-                                .frame(width: 60)
-                                .padding(.vertical, 8)
-                                .padding(.horizontal, 10)
-                                .background(Color(UIColor.tertiarySystemBackground))
-                                .cornerRadius(8)
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: 8)
-                                        .stroke(Color(UIColor.separator), lineWidth: 1)
-                                )
-                                .focused($maxPauseFieldFocused)
-                                .onSubmit { commitPauseValues() }
-                                .onChange(of: maxPauseFieldFocused) {
-                                    if !maxPauseFieldFocused { commitPauseValues() }
-                                }
-                                .accessibilityLabel("Maximum pause duration")
-                                .accessibilityValue("\(maxPauseText) seconds")
-                            Text("s")
-                                .foregroundColor(.secondary)
-                                .accessibilityHidden(true)
-                        }
-                    }
-
-                    Spacer()
-                }
-
-                // Inline error
-                if lastValidMinPause > lastValidMaxPause {
-                    Label("Min must be less than Max", systemImage: "exclamationmark.triangle.fill")
-                        .font(.caption)
-                        .foregroundColor(Color(UIColor.systemOrange))
-                } else {
-                    Text("Set both values equal for fixed pauses")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                }
-            }
+            PauseLengthEditor(
+                minPauseText: $minPauseText,
+                maxPauseText: $maxPauseText,
+                lastValidMinPause: $lastValidMinPause,
+                lastValidMaxPause: $lastValidMaxPause,
+                minPauseFieldFocused: $minPauseFieldFocused,
+                maxPauseFieldFocused: $maxPauseFieldFocused
+            )
         }
         .padding()
         .background(Color(UIColor.secondarySystemBackground))
@@ -302,29 +268,9 @@ struct ContentView: View {
             sectionLabel("Playback", icon: "waveform")
 
             HStack(spacing: 10) {
-                ControlButton(
-                    title: playButtonLabel,
-                    icon: playButtonIcon,
-                    style: .primary,
-                    isEnabled: canPlay,
-                    action: handlePlayTap
-                )
-
-                ControlButton(
-                    title: "Pause",
-                    icon: "pause.fill",
-                    style: .secondary,
-                    isEnabled: canPause,
-                    action: { player.togglePause() }
-                )
-
-                ControlButton(
-                    title: "Stop",
-                    icon: "stop.fill",
-                    style: .secondary,
-                    isEnabled: canStop,
-                    action: { player.stop() }
-                )
+                ControlButton(title: playButtonLabel, icon: playButtonIcon, style: .primary, isEnabled: canPlay, action: handlePlayTap)
+                ControlButton(title: "Pause", icon: "pause.fill", style: .secondary, isEnabled: canPause, action: { player.togglePause() })
+                ControlButton(title: "Stop", icon: "stop.fill", style: .secondary, isEnabled: canStop, action: { player.stop() })
             }
         }
     }
@@ -333,29 +279,21 @@ struct ContentView: View {
 
     private var statusSection: some View {
         VStack(alignment: .leading, spacing: 12) {
-
-            // Inline feedback (scan status, errors)
             if !player.statusMessage.isEmpty {
                 HStack(spacing: 8) {
-                    Image(systemName: "info.circle")
-                        .accessibilityHidden(true)
-                    Text(player.statusMessage)
-                        .font(.footnote)
+                    Image(systemName: "info.circle").accessibilityHidden(true)
+                    Text(player.statusMessage).font(.footnote)
                 }
                 .foregroundColor(.secondary)
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
 
-            // Now playing
             if !player.currentFileName.isEmpty {
                 VStack(alignment: .leading, spacing: 6) {
                     Label("Now Playing", systemImage: "music.note")
-                        .font(.caption.bold())
-                        .foregroundColor(.secondary)
-
+                        .font(.caption.bold()).foregroundColor(.secondary)
                     Text(player.currentFileName)
-                        .font(.body)
-                        .foregroundColor(.primary)
+                        .font(.body).foregroundColor(.primary)
                         .lineLimit(3)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
@@ -366,15 +304,11 @@ struct ContentView: View {
                 .accessibilityLabel("Now playing: \(player.currentFileName)")
             }
 
-            // Countdown — shown only during pause phase
             if player.state == .countdown {
                 HStack(spacing: 10) {
-                    Image(systemName: "timer")
-                        .foregroundColor(.primary)
-                        .accessibilityHidden(true)
+                    Image(systemName: "timer").foregroundColor(.primary).accessibilityHidden(true)
                     Text("Next clip in \(player.countdownSeconds)s")
-                        .font(.body.monospacedDigit())
-                        .foregroundColor(.primary)
+                        .font(.body.monospacedDigit()).foregroundColor(.primary)
                     Spacer()
                 }
                 .padding()
@@ -385,15 +319,11 @@ struct ContentView: View {
         }
     }
 
-    // MARK: - Helpers
+    // MARK: Helpers
 
     private func sectionLabel(_ text: String, icon: String) -> some View {
-        Label(text, systemImage: icon)
-            .font(.headline)
-            .foregroundColor(.primary)
+        Label(text, systemImage: icon).font(.headline).foregroundColor(.primary)
     }
-
-    // MARK: Actions
 
     private func handlePlayTap() {
         guard let url = selectedFolderURL else { return }
@@ -402,7 +332,7 @@ struct ContentView: View {
         maxPauseFieldFocused = false
 
         if player.state == .paused {
-            player.togglePause()          // resume existing session
+            player.togglePause()
         } else {
             player.startSession(
                 folderURL: url,
@@ -415,19 +345,588 @@ struct ContentView: View {
         }
     }
 
-    /// Validates min/max pause text fields; reverts silently to last valid value on invalid input.
     private func commitPauseValues() {
-        if let value = Int(minPauseText.trimmingCharacters(in: .whitespaces)), value > 0 {
-            lastValidMinPause = value
-        } else {
-            minPauseText = "\(lastValidMinPause)"
+        if let v = Int(minPauseText.trimmingCharacters(in: .whitespaces)), v > 0 {
+            lastValidMinPause = v
+        } else { minPauseText = "\(lastValidMinPause)" }
+
+        if let v = Int(maxPauseText.trimmingCharacters(in: .whitespaces)), v > 0 {
+            lastValidMaxPause = v
+        } else { maxPauseText = "\(lastValidMaxPause)" }
+    }
+}
+
+// MARK: - ============================================================
+// MARK: - LONG MODE VIEW
+// MARK: - ============================================================
+
+struct LongModeView: View {
+
+    @StateObject private var player = LongModePlaybackManager()
+
+    // Source selection
+    @State private var sourceType: LongModeSource = .folder
+    @State private var showFolderPicker = false
+    @State private var showFilePicker = false
+    @State private var selectedFolderURL: URL?
+    @State private var selectedFolderName: String = ""
+    @State private var selectedFileURL: URL?
+    @State private var selectedFileName: String = ""
+
+    // Settings
+    @State private var includeSubfolders: Bool = false
+    @State private var shufflePlayback: Bool = true
+    @State private var autoReplay: Bool = true
+
+    // Interval
+    @State private var intervalText: String = "60"
+    @State private var lastValidInterval: Int = 60
+
+    // Within-file pause (Min/Max)
+    @State private var minPauseText: String = "10"
+    @State private var maxPauseText: String = "30"
+    @State private var lastValidMinPause: Int = 10
+    @State private var lastValidMaxPause: Int = 30
+
+    // Between-files pause (fixed)
+    @State private var betweenFilesPauseText: String = "5"
+    @State private var lastValidBetweenFilesPause: Int = 5
+
+    // Seek bar
+    @State private var isSeeking: Bool = false
+    @State private var seekValue: Double = 0
+
+    // Keyboard
+    @FocusState private var intervalFieldFocused: Bool
+    @FocusState private var minPauseFieldFocused: Bool
+    @FocusState private var maxPauseFieldFocused: Bool
+    @FocusState private var betweenFilesFieldFocused: Bool
+
+    // MARK: Computed helpers
+
+    private var hasSource: Bool {
+        sourceType == .folder ? selectedFolderURL != nil : selectedFileURL != nil
+    }
+
+    private var canPlay: Bool {
+        hasSource && (player.state == .idle || player.state == .finished)
+    }
+
+    private var isActive: Bool {
+        player.state == .playing || player.state == .paused
+            || player.state == .withinFilePause || player.state == .betweenFiles
+    }
+
+    private var playPauseIcon: String {
+        player.state == .playing ? "pause.fill" : "play.fill"
+    }
+
+    private var playPauseLabel: String {
+        switch player.state {
+        case .playing: return "Pause"
+        case .paused: return "Resume"
+        default: return "Play"
+        }
+    }
+
+    // MARK: Body
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 28) {
+            playerSection
+            settingsSection
+            statusSection
+                .animation(.default, value: player.state)
+                .animation(.default, value: player.currentFileName)
+                .animation(.default, value: player.countdownSeconds)
+        }
+        .toolbar {
+            ToolbarItemGroup(placement: .keyboard) {
+                Spacer()
+                Button("Done") {
+                    dismissAllKeyboards()
+                    commitAllValues()
+                }
+            }
+        }
+        .sheet(isPresented: $showFolderPicker) {
+            FolderPickerRepresentable(onFolderPicked: { url in
+                selectedFolderURL = url
+                selectedFolderName = url.lastPathComponent
+                showFolderPicker = false
+            })
+            .preferredColorScheme(.dark)
+        }
+        .sheet(isPresented: $showFilePicker) {
+            FilePickerRepresentable(onFilePicked: { url in
+                selectedFileURL = url
+                selectedFileName = url.lastPathComponent
+                showFilePicker = false
+            })
+            .preferredColorScheme(.dark)
+        }
+    }
+
+    // MARK: - Player Section (always visible, not scrolled away)
+
+    private var playerSection: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            sectionLabel("Player", icon: "waveform")
+
+            // Current filename
+            if !player.currentFileName.isEmpty {
+                Text(player.currentFileName)
+                    .font(.body)
+                    .foregroundColor(.primary)
+                    .lineLimit(2)
+                    .truncationMode(.middle)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+
+            // Seek bar
+            if player.duration > 0 {
+                VStack(spacing: 4) {
+                    Slider(
+                        value: Binding(
+                            get: { isSeeking ? seekValue : player.currentTime },
+                            set: { newVal in
+                                isSeeking = true
+                                seekValue = newVal
+                            }
+                        ),
+                        in: 0...max(player.duration, 1),
+                        onEditingChanged: { editing in
+                            if !editing {
+                                player.seek(to: seekValue)
+                                isSeeking = false
+                            }
+                        }
+                    )
+                    .tint(Color(UIColor.systemBlue))
+                    .accessibilityLabel("Seek position")
+                    .accessibilityValue(formatTime(player.currentTime))
+
+                    HStack {
+                        Text(formatTime(isSeeking ? seekValue : player.currentTime))
+                            .font(.caption.monospacedDigit())
+                            .foregroundColor(.secondary)
+                        Spacer()
+                        Text(formatTime(player.duration))
+                            .font(.caption.monospacedDigit())
+                            .foregroundColor(.secondary)
+                    }
+                }
+            }
+
+            // Playback controls: Previous | Play/Pause | Next
+            HStack(spacing: 10) {
+                ControlButton(
+                    title: "Previous",
+                    icon: "backward.fill",
+                    style: .secondary,
+                    isEnabled: isActive,
+                    action: { player.previous() }
+                )
+
+                ControlButton(
+                    title: playPauseLabel,
+                    icon: playPauseIcon,
+                    style: .primary,
+                    isEnabled: canPlay || isActive,
+                    action: handlePlayPauseTap
+                )
+
+                ControlButton(
+                    title: "Next",
+                    icon: "forward.fill",
+                    style: .secondary,
+                    isEnabled: isActive,
+                    action: { player.next() }
+                )
+            }
+        }
+        .padding()
+        .background(Color(UIColor.secondarySystemBackground))
+        .cornerRadius(14)
+    }
+
+    // MARK: - Settings Section (scrollable)
+
+    private var settingsSection: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            sectionLabel("Settings", icon: "slider.horizontal.3")
+
+            // Source selector
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Source").foregroundColor(.primary)
+                Picker("Source", selection: $sourceType) {
+                    ForEach(LongModeSource.allCases, id: \.self) { s in
+                        Text(s.rawValue).tag(s)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .accessibilityLabel("Source type")
+            }
+
+            // Source picker button
+            if sourceType == .folder {
+                sourceFolderButton
+            } else {
+                sourceFileButton
+            }
+
+            // Subfolder toggle (only for folder)
+            if sourceType == .folder {
+                divider
+                Toggle(isOn: $includeSubfolders) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Include Subfolders").foregroundColor(.primary)
+                        Text("Recursively scan nested folders").font(.caption).foregroundColor(.secondary)
+                    }
+                }
+                .tint(Color(UIColor.systemBlue))
+                .accessibilityLabel("Include subfolders")
+            }
+
+            divider
+
+            // Shuffle toggle
+            Toggle(isOn: $shufflePlayback) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Shuffle").foregroundColor(.primary)
+                    Text("Randomize playback order").font(.caption).foregroundColor(.secondary)
+                }
+            }
+            .tint(Color(UIColor.systemBlue))
+            .accessibilityLabel("Shuffle")
+
+            divider
+
+            // Auto-Replay toggle
+            Toggle(isOn: $autoReplay) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Auto-Replay").foregroundColor(.primary)
+                    Text("Loop when all files finish").font(.caption).foregroundColor(.secondary)
+                }
+            }
+            .tint(Color(UIColor.systemBlue))
+            .accessibilityLabel("Auto-Replay")
+            .onChange(of: autoReplay) { player.autoReplay = autoReplay }
+
+            divider
+
+            // Interval setting
+            HStack(alignment: .center, spacing: 12) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Pause Interval").foregroundColor(.primary)
+                    Text("Insert a pause every X seconds").font(.caption).foregroundColor(.secondary)
+                }
+                Spacer()
+                TextField("60", text: $intervalText)
+                    .keyboardType(.numberPad)
+                    .multilineTextAlignment(.center)
+                    .frame(width: 70)
+                    .padding(.vertical, 8)
+                    .padding(.horizontal, 10)
+                    .background(Color(UIColor.tertiarySystemBackground))
+                    .cornerRadius(8)
+                    .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color(UIColor.separator), lineWidth: 1))
+                    .focused($intervalFieldFocused)
+                    .onSubmit { commitAllValues() }
+                    .onChange(of: intervalFieldFocused) { if !intervalFieldFocused { commitAllValues() } }
+                    .accessibilityLabel("Pause interval")
+                    .accessibilityValue("\(intervalText) seconds")
+                Text("s").foregroundColor(.secondary).accessibilityHidden(true)
+            }
+
+            divider
+
+            // Within-file pause duration (Min/Max) — shared component
+            PauseLengthEditor(
+                minPauseText: $minPauseText,
+                maxPauseText: $maxPauseText,
+                lastValidMinPause: $lastValidMinPause,
+                lastValidMaxPause: $lastValidMaxPause,
+                minPauseFieldFocused: $minPauseFieldFocused,
+                maxPauseFieldFocused: $maxPauseFieldFocused
+            )
+
+            // Between-files pause (folder only)
+            if sourceType == .folder {
+                divider
+                HStack(alignment: .center, spacing: 12) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Pause Between Files").foregroundColor(.primary)
+                        Text("Fixed silence between files").font(.caption).foregroundColor(.secondary)
+                    }
+                    Spacer()
+                    TextField("5", text: $betweenFilesPauseText)
+                        .keyboardType(.numberPad)
+                        .multilineTextAlignment(.center)
+                        .frame(width: 60)
+                        .padding(.vertical, 8)
+                        .padding(.horizontal, 10)
+                        .background(Color(UIColor.tertiarySystemBackground))
+                        .cornerRadius(8)
+                        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color(UIColor.separator), lineWidth: 1))
+                        .focused($betweenFilesFieldFocused)
+                        .onSubmit { commitAllValues() }
+                        .onChange(of: betweenFilesFieldFocused) { if !betweenFilesFieldFocused { commitAllValues() } }
+                        .accessibilityLabel("Pause between files")
+                        .accessibilityValue("\(betweenFilesPauseText) seconds")
+                    Text("s").foregroundColor(.secondary).accessibilityHidden(true)
+                }
+            }
+        }
+        .padding()
+        .background(Color(UIColor.secondarySystemBackground))
+        .cornerRadius(14)
+    }
+
+    // MARK: Source Buttons
+
+    private var sourceFolderButton: some View {
+        Button(action: { showFolderPicker = true }) {
+            HStack(spacing: 12) {
+                Image(systemName: selectedFolderURL == nil ? "folder.badge.plus" : "folder.fill")
+                    .font(.title3).accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(selectedFolderURL == nil ? "Select Folder\u{2026}" : "Selected Folder")
+                        .font(.caption).foregroundColor(.secondary)
+                    Text(selectedFolderURL == nil ? "Tap to choose" : selectedFolderName)
+                        .font(.body).lineLimit(1).truncationMode(.middle)
+                }
+                Spacer()
+                Image(systemName: "chevron.right").foregroundColor(.secondary).accessibilityHidden(true)
+            }
+            .padding()
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color(UIColor.tertiarySystemBackground))
+            .cornerRadius(12)
+            .foregroundColor(.primary)
+        }
+    }
+
+    private var sourceFileButton: some View {
+        Button(action: { showFilePicker = true }) {
+            HStack(spacing: 12) {
+                Image(systemName: selectedFileURL == nil ? "doc.badge.plus" : "doc.fill")
+                    .font(.title3).accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(selectedFileURL == nil ? "Select File\u{2026}" : "Selected File")
+                        .font(.caption).foregroundColor(.secondary)
+                    Text(selectedFileURL == nil ? "Tap to choose" : selectedFileName)
+                        .font(.body).lineLimit(1).truncationMode(.middle)
+                }
+                Spacer()
+                Image(systemName: "chevron.right").foregroundColor(.secondary).accessibilityHidden(true)
+            }
+            .padding()
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color(UIColor.tertiarySystemBackground))
+            .cornerRadius(12)
+            .foregroundColor(.primary)
+        }
+    }
+
+    // MARK: Status
+
+    private var statusSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            if !player.statusMessage.isEmpty {
+                HStack(spacing: 8) {
+                    Image(systemName: "info.circle").accessibilityHidden(true)
+                    Text(player.statusMessage).font(.footnote)
+                }
+                .foregroundColor(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+
+            // Countdown (within-file pause or between-files)
+            if player.state == .withinFilePause {
+                countdownBanner(label: "Pause", seconds: player.countdownSeconds)
+            } else if player.state == .betweenFiles {
+                countdownBanner(label: "Next file in", seconds: player.countdownSeconds)
+            }
+        }
+    }
+
+    private func countdownBanner(label: String, seconds: Int) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: "timer").foregroundColor(.primary).accessibilityHidden(true)
+            Text("\(label) \(seconds)s")
+                .font(.body.monospacedDigit()).foregroundColor(.primary)
+            Spacer()
+        }
+        .padding()
+        .background(Color(UIColor.secondarySystemBackground))
+        .cornerRadius(12)
+        .accessibilityLabel("\(label) \(seconds) seconds")
+    }
+
+    // MARK: - Helpers
+
+    private var divider: some View {
+        Divider().background(Color(UIColor.separator))
+    }
+
+    private func sectionLabel(_ text: String, icon: String) -> some View {
+        Label(text, systemImage: icon).font(.headline).foregroundColor(.primary)
+    }
+
+    private func formatTime(_ time: TimeInterval) -> String {
+        let t = max(0, time)
+        let minutes = Int(t) / 60
+        let seconds = Int(t) % 60
+        return String(format: "%d:%02d", minutes, seconds)
+    }
+
+    // MARK: Actions
+
+    private func handlePlayPauseTap() {
+        if isActive {
+            player.togglePlayPause()
+            return
         }
 
-        if let value = Int(maxPauseText.trimmingCharacters(in: .whitespaces)), value > 0 {
-            lastValidMaxPause = value
+        commitAllValues()
+        dismissAllKeyboards()
+
+        if sourceType == .folder {
+            guard let url = selectedFolderURL else { return }
+            player.startFolderSession(
+                folderURL: url,
+                recursive: includeSubfolders,
+                intervalSeconds: lastValidInterval,
+                minPause: lastValidMinPause,
+                maxPause: max(lastValidMinPause, lastValidMaxPause),
+                betweenFilesPause: lastValidBetweenFilesPause,
+                shuffle: shufflePlayback,
+                autoReplay: autoReplay
+            )
         } else {
-            maxPauseText = "\(lastValidMaxPause)"
+            guard let url = selectedFileURL else { return }
+            player.startFileSession(
+                fileURL: url,
+                intervalSeconds: lastValidInterval,
+                minPause: lastValidMinPause,
+                maxPause: max(lastValidMinPause, lastValidMaxPause),
+                autoReplay: autoReplay
+            )
         }
+    }
+
+    private func dismissAllKeyboards() {
+        intervalFieldFocused = false
+        minPauseFieldFocused = false
+        maxPauseFieldFocused = false
+        betweenFilesFieldFocused = false
+    }
+
+    private func commitAllValues() {
+        if let v = Int(intervalText.trimmingCharacters(in: .whitespaces)), v > 0 {
+            lastValidInterval = v
+        } else { intervalText = "\(lastValidInterval)" }
+
+        if let v = Int(minPauseText.trimmingCharacters(in: .whitespaces)), v > 0 {
+            lastValidMinPause = v
+        } else { minPauseText = "\(lastValidMinPause)" }
+
+        if let v = Int(maxPauseText.trimmingCharacters(in: .whitespaces)), v > 0 {
+            lastValidMaxPause = v
+        } else { maxPauseText = "\(lastValidMaxPause)" }
+
+        if let v = Int(betweenFilesPauseText.trimmingCharacters(in: .whitespaces)), v > 0 {
+            lastValidBetweenFilesPause = v
+        } else { betweenFilesPauseText = "\(lastValidBetweenFilesPause)" }
+    }
+}
+
+// MARK: - ============================================================
+// MARK: - SHARED COMPONENTS
+// MARK: - ============================================================
+
+// MARK: - Pause Length Editor (shared between Short and Long Mode)
+
+struct PauseLengthEditor: View {
+
+    @Binding var minPauseText: String
+    @Binding var maxPauseText: String
+    @Binding var lastValidMinPause: Int
+    @Binding var lastValidMaxPause: Int
+    var minPauseFieldFocused: FocusState<Bool>.Binding
+    var maxPauseFieldFocused: FocusState<Bool>.Binding
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Pause Length").foregroundColor(.primary)
+
+            HStack(spacing: 12) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Min Pause").font(.caption).foregroundColor(.secondary)
+                    HStack(spacing: 4) {
+                        TextField("10", text: $minPauseText)
+                            .keyboardType(.numberPad)
+                            .multilineTextAlignment(.center)
+                            .frame(width: 60)
+                            .padding(.vertical, 8)
+                            .padding(.horizontal, 10)
+                            .background(Color(UIColor.tertiarySystemBackground))
+                            .cornerRadius(8)
+                            .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color(UIColor.separator), lineWidth: 1))
+                            .focused(minPauseFieldFocused)
+                            .onSubmit { commitValues() }
+                            .onChange(of: minPauseFieldFocused.wrappedValue) { if !minPauseFieldFocused.wrappedValue { commitValues() } }
+                            .accessibilityLabel("Minimum pause duration")
+                            .accessibilityValue("\(minPauseText) seconds")
+                        Text("s").foregroundColor(.secondary).accessibilityHidden(true)
+                    }
+                }
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Max Pause").font(.caption).foregroundColor(.secondary)
+                    HStack(spacing: 4) {
+                        TextField("30", text: $maxPauseText)
+                            .keyboardType(.numberPad)
+                            .multilineTextAlignment(.center)
+                            .frame(width: 60)
+                            .padding(.vertical, 8)
+                            .padding(.horizontal, 10)
+                            .background(Color(UIColor.tertiarySystemBackground))
+                            .cornerRadius(8)
+                            .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color(UIColor.separator), lineWidth: 1))
+                            .focused(maxPauseFieldFocused)
+                            .onSubmit { commitValues() }
+                            .onChange(of: maxPauseFieldFocused.wrappedValue) { if !maxPauseFieldFocused.wrappedValue { commitValues() } }
+                            .accessibilityLabel("Maximum pause duration")
+                            .accessibilityValue("\(maxPauseText) seconds")
+                        Text("s").foregroundColor(.secondary).accessibilityHidden(true)
+                    }
+                }
+
+                Spacer()
+            }
+
+            if lastValidMinPause > lastValidMaxPause {
+                Label("Min must be less than Max", systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption)
+                    .foregroundColor(Color(UIColor.systemOrange))
+            } else {
+                Text("Set both values equal for fixed pauses")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+        }
+    }
+
+    private func commitValues() {
+        if let v = Int(minPauseText.trimmingCharacters(in: .whitespaces)), v > 0 {
+            lastValidMinPause = v
+        } else { minPauseText = "\(lastValidMinPause)" }
+
+        if let v = Int(maxPauseText.trimmingCharacters(in: .whitespaces)), v > 0 {
+            lastValidMaxPause = v
+        } else { maxPauseText = "\(lastValidMaxPause)" }
     }
 }
 
@@ -435,7 +934,7 @@ struct ContentView: View {
 
 /// Three-state button: primary (filled), secondary (outlined), disabled (muted).
 /// Uses icons + labels so state is never conveyed by colour alone.
-private struct ControlButton: View {
+struct ControlButton: View {
 
     enum Style { case primary, secondary }
 
@@ -449,8 +948,7 @@ private struct ControlButton: View {
         Button(action: action) {
             VStack(spacing: 6) {
                 Image(systemName: icon)
-                    .font(.title2)
-                    .accessibilityHidden(true)
+                    .font(.title2).accessibilityHidden(true)
                 Text(title)
                     .font(.caption.bold())
             }
@@ -459,10 +957,7 @@ private struct ControlButton: View {
             .background(buttonBackground)
             .foregroundColor(buttonForeground)
             .cornerRadius(12)
-            .overlay(
-                RoundedRectangle(cornerRadius: 12)
-                    .stroke(buttonBorder, lineWidth: 1)
-            )
+            .overlay(RoundedRectangle(cornerRadius: 12).stroke(buttonBorder, lineWidth: 1))
         }
         .disabled(!isEnabled)
         .accessibilityLabel(title)
@@ -490,6 +985,33 @@ private struct ControlButton: View {
         (style == .secondary && isEnabled)
             ? Color(UIColor.separator)
             : Color.clear
+    }
+}
+
+// MARK: - File Picker (for single file selection in Long Mode)
+
+struct FilePickerRepresentable: UIViewControllerRepresentable {
+    let onFilePicked: (URL) -> Void
+
+    func makeUIViewController(context: Context) -> UIDocumentPickerViewController {
+        let picker = UIDocumentPickerViewController(forOpeningContentTypes: [.audio])
+        picker.allowsMultipleSelection = false
+        picker.delegate = context.coordinator
+        return picker
+    }
+
+    func updateUIViewController(_ uiViewController: UIDocumentPickerViewController, context: Context) {}
+
+    func makeCoordinator() -> Coordinator { Coordinator(onFilePicked: onFilePicked) }
+
+    final class Coordinator: NSObject, UIDocumentPickerDelegate {
+        private let onFilePicked: (URL) -> Void
+        init(onFilePicked: @escaping (URL) -> Void) { self.onFilePicked = onFilePicked }
+
+        func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
+            guard let url = urls.first else { return }
+            onFilePicked(url)
+        }
     }
 }
 
