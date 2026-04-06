@@ -14,6 +14,74 @@ enum LongPlaybackState: Equatable {
     case finished
 }
 
+// MARK: - Saved Playback State
+
+/// Persists the playback position between sessions (Long Mode only).
+struct SavedPlaybackState: Codable {
+    let fileURL: String            // URL string of the current file (fallback)
+    let fileName: String
+    let timestamp: TimeInterval    // Position within the file
+    let folderURL: String?         // Folder URL (nil for single-file source)
+    let folderName: String?
+    let sourceType: String         // "file" or "folder"
+    let includeSubfolders: Bool
+    let fileBookmark: Data?        // Security-scoped bookmark for the file
+    let folderBookmark: Data?      // Security-scoped bookmark for the folder
+
+    private static let key = "LongMode_SavedPlaybackState"
+
+    func save() {
+        if let data = try? JSONEncoder().encode(self) {
+            UserDefaults.standard.set(data, forKey: Self.key)
+        }
+    }
+
+    static func load() -> SavedPlaybackState? {
+        guard let data = UserDefaults.standard.data(forKey: key) else { return nil }
+        return try? JSONDecoder().decode(SavedPlaybackState.self, from: data)
+    }
+
+    static func clear() {
+        UserDefaults.standard.removeObject(forKey: key)
+    }
+
+    /// Resolves the file bookmark back to a security-scoped URL.
+    /// Falls back to plain URL(string:) if bookmark resolution fails.
+    func resolveFileURL() -> URL? {
+        if let bookmark = fileBookmark {
+            var isStale = false
+            if let url = try? URL(
+                resolvingBookmarkData: bookmark,
+                options: [],
+                relativeTo: nil,
+                bookmarkDataIsStale: &isStale
+            ) {
+                print("[AudioSipper] resolveFileURL: resolved from bookmark (stale=\(isStale))")
+                return url
+            }
+        }
+        print("[AudioSipper] resolveFileURL: falling back to URL string")
+        return URL(string: fileURL)
+    }
+
+    /// Resolves the folder bookmark back to a security-scoped URL.
+    func resolveFolderURL() -> URL? {
+        if let bookmark = folderBookmark {
+            var isStale = false
+            if let url = try? URL(
+                resolvingBookmarkData: bookmark,
+                options: [],
+                relativeTo: nil,
+                bookmarkDataIsStale: &isStale
+            ) {
+                return url
+            }
+        }
+        guard let str = folderURL else { return nil }
+        return URL(string: str)
+    }
+}
+
 // MARK: - Manager
 
 /// Handles Long Mode playback: longer audio files with automatic within-file
@@ -30,6 +98,10 @@ final class LongModePlaybackManager: NSObject, ObservableObject {
     @Published private(set) var currentTime: TimeInterval = 0
     @Published private(set) var duration: TimeInterval = 0
 
+    /// True when the manager has loaded saved-session metadata and is waiting
+    /// for the user to tap Play. The view checks this flag.
+    @Published private(set) var restoredFromSave: Bool = false
+
     // MARK: Settings (set before/during session)
 
     var autoReplay: Bool = true
@@ -40,6 +112,12 @@ final class LongModePlaybackManager: NSObject, ObservableObject {
     private var audioPlayer: AVAudioPlayer?
     private var playlist: [URL] = []
     private var currentIndex: Int = 0
+
+    /// The URL that `playFromRestoredPosition` will use.
+    /// Set by `loadSavedSession`, consumed by `playFromRestoredPosition`.
+    private var currentFileURL: URL?
+    /// Seek-to time for a restored session. Applied once on play.
+    private var pendingSeekTime: TimeInterval = 0
 
     // Timers
     private var countdownTimer: Timer?
@@ -60,12 +138,86 @@ final class LongModePlaybackManager: NSObject, ObservableObject {
     private var activeFolderURL: URL?
     private var activeFileURL: URL?
     private var wasPlayingClipWhenPaused: Bool = false
+    private var justStartedPlayback: Bool = false
+
+    // Source info for save/restore
+    private var sourceType: String = "folder"
+    private var sourceFolderName: String = ""
+    private var sourceIncludeSubfolders: Bool = false
 
     // MARK: Init
 
     override init() {
         super.init()
         configureAudioSession()
+
+        // Listen for app-going-to-background to save playback state
+        NotificationCenter.default.addObserver(
+            forName: .savePlaybackState,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.savePlaybackState()
+            }
+        }
+    }
+
+    // MARK: - Unified Audio Setup
+
+    /// Single function that sets up AVAudioPlayer for a URL and starts playback.
+    /// Both fresh sessions and restored sessions funnel through here.
+    /// - Parameters:
+    ///   - url: The audio file to play.
+    ///   - seekTo: Optional position to seek to before playing (0 for fresh).
+    /// - Returns: `true` if playback started successfully.
+    @discardableResult
+    private func setupAudioAndPlay(url: URL, seekTo: TimeInterval = 0) -> Bool {
+        // Tear down any existing player (but NOT security-scoped access)
+        audioPlayer?.stop()
+        audioPlayer = nil
+        stopAllTimers()
+
+        do {
+            let player = try AVAudioPlayer(contentsOf: url)
+            player.delegate = self
+            audioPlayer = player
+            currentFileURL = url
+            currentFileName = url.lastPathComponent
+            duration = player.duration
+            player.prepareToPlay()
+
+            // Seek if needed
+            let clampedSeek = min(max(seekTo, 0), player.duration)
+            if clampedSeek > 0 {
+                player.currentTime = clampedSeek
+            }
+            currentTime = clampedSeek
+
+            // Reset interval tracking — fresh timer from this point
+            elapsedPlaybackSinceLastPause = 0
+            lastProgressTimestamp = player.currentTime
+
+            // Reset pause bookkeeping so togglePlayPause works correctly
+            wasPlayingClipWhenPaused = true
+
+            // Prevent immediate interval pause on first progress tick
+            justStartedPlayback = true
+
+            // Start playback
+            print("[AudioSipper] PLAY CALLED for \(url.lastPathComponent)")
+            player.play()
+            state = .playing
+            print("[AudioSipper] STATE -> \(state)")
+            startProgressTimer()
+
+            print("[AudioSipper] setupAudioAndPlay: playing \(url.lastPathComponent) from \(clampedSeek)s")
+            return true
+        } catch {
+            print("[AudioSipper] setupAudioAndPlay: FAILED for \(url.lastPathComponent) — \(error)")
+            currentFileURL = nil
+            return false
+        }
     }
 
     // MARK: - Public Interface
@@ -90,6 +242,10 @@ final class LongModePlaybackManager: NSObject, ObservableObject {
         self.autoReplay = autoReplay
         activeFolderURL = folderURL
         activeFileURL = nil
+        self.sourceType = "folder"
+        self.sourceFolderName = folderURL.lastPathComponent
+        self.sourceIncludeSubfolders = recursive
+        self.restoredFromSave = false
 
         guard folderURL.startAccessingSecurityScopedResource() else {
             statusMessage = "Could not access the selected folder. Please choose it again."
@@ -134,6 +290,10 @@ final class LongModePlaybackManager: NSObject, ObservableObject {
         self.autoReplay = autoReplay
         activeFileURL = fileURL
         activeFolderURL = nil
+        self.sourceType = "file"
+        self.sourceFolderName = ""
+        self.sourceIncludeSubfolders = false
+        self.restoredFromSave = false
 
         guard fileURL.startAccessingSecurityScopedResource() else {
             statusMessage = "Could not access the selected file. Please choose it again."
@@ -207,9 +367,12 @@ final class LongModePlaybackManager: NSObject, ObservableObject {
         // Do NOT reset the interval timer on seek — per requirements
     }
 
-    /// Stop session entirely.
+    /// Stop session entirely. Clears saved state since user explicitly stopped.
     func stop() {
         tearDown()
+        SavedPlaybackState.clear()
+        restoredFromSave = false
+        currentFileURL = nil
         state = .idle
         currentFileName = ""
         currentTime = 0
@@ -218,31 +381,165 @@ final class LongModePlaybackManager: NSObject, ObservableObject {
         statusMessage = ""
     }
 
+    // MARK: - Save / Restore
+
+    /// Saves current playback position to persistent storage.
+    /// Called when the app goes to background or is closed.
+    func savePlaybackState() {
+        guard let player = audioPlayer,
+              currentIndex < playlist.count else { return }
+
+        let fileUrl = playlist[currentIndex]
+
+        // Create security-scoped bookmarks so we can re-access files after app restart
+        let fileBookmark = try? fileUrl.bookmarkData(
+            options: .minimalBookmark,
+            includingResourceValuesForKeys: nil,
+            relativeTo: nil
+        )
+        let folderBookmark: Data? = {
+            guard let folder = activeFolderURL else { return nil }
+            return try? folder.bookmarkData(
+                options: .minimalBookmark,
+                includingResourceValuesForKeys: nil,
+                relativeTo: nil
+            )
+        }()
+
+        let saved = SavedPlaybackState(
+            fileURL: fileUrl.absoluteString,
+            fileName: fileUrl.lastPathComponent,
+            timestamp: player.currentTime,
+            folderURL: activeFolderURL?.absoluteString,
+            folderName: sourceFolderName.isEmpty ? nil : sourceFolderName,
+            sourceType: sourceType,
+            includeSubfolders: sourceIncludeSubfolders,
+            fileBookmark: fileBookmark,
+            folderBookmark: folderBookmark
+        )
+        saved.save()
+        print("[AudioSipper] savePlaybackState: \(fileUrl.lastPathComponent) at \(player.currentTime)s bookmark=\(fileBookmark != nil)")
+    }
+
+    /// Lightweight restore: reads saved metadata, sets `currentFileURL` and
+    /// `pendingSeekTime`, and sets `restoredFromSave = true`.
+    /// Does NOT create an AVAudioPlayer or touch the audio engine.
+    /// Returns the saved info so the view can populate its source UI.
+    @discardableResult
+    func loadSavedSession() -> SavedPlaybackState? {
+        guard let saved = SavedPlaybackState.load(),
+              let fileUrl = saved.resolveFileURL() else {
+            return nil
+        }
+
+        // Store metadata only — no audio setup
+        currentFileURL = fileUrl
+        currentFileName = fileUrl.lastPathComponent
+        pendingSeekTime = saved.timestamp
+        restoredFromSave = true
+
+        // Preserve folder context so playFromRestoredPosition can rebuild the playlist
+        sourceType = saved.sourceType
+        sourceFolderName = saved.folderName ?? ""
+        sourceIncludeSubfolders = saved.includeSubfolders
+        if saved.sourceType == "folder", let folderUrl = saved.resolveFolderURL() {
+            activeFolderURL = folderUrl
+        }
+
+        print("[AudioSipper] loadSavedSession: \(fileUrl.lastPathComponent) at \(saved.timestamp)s source=\(saved.sourceType) — waiting for Play")
+        return saved
+    }
+
+    /// Applies settings before resuming from a restored session.
+    func applySettings(intervalSeconds: Int, minPause: Int, maxPause: Int, autoReplay: Bool) {
+        self.intervalSeconds = intervalSeconds
+        self.minPauseDuration = minPause
+        self.maxPauseDuration = maxPause
+        self.autoReplay = autoReplay
+    }
+
+    /// Starts playback from a restored saved session.
+    /// Goes through the same `setupAudioAndPlay` path as fresh sessions.
+    /// Interval timer starts fresh from zero.
+    func playFromRestoredPosition() {
+        guard let url = currentFileURL else {
+            print("[AudioSipper] playFromRestoredPosition: ABORT — currentFileURL is nil")
+            assertionFailure("Missing file URL on play")
+            return
+        }
+
+        print("[AudioSipper] playFromRestoredPosition: url=\(url.lastPathComponent) seekTo=\(pendingSeekTime)s source=\(sourceType)")
+
+        // --- Rebuild playlist from folder or single file ---
+        if sourceType == "folder", let folderUrl = activeFolderURL {
+            // Acquire security-scoped access to the folder
+            let folderAccess = folderUrl.startAccessingSecurityScopedResource()
+            print("[AudioSipper] playFromRestoredPosition: folder access=\(folderAccess)")
+
+            let files = Self.scanAudioFiles(in: folderUrl, recursive: sourceIncludeSubfolders)
+            playlist = shuffle
+                ? files.shuffled()
+                : files.sorted { $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending }
+
+            // Find the current file's position in the playlist
+            if let idx = playlist.firstIndex(where: { $0.lastPathComponent == url.lastPathComponent }) {
+                currentIndex = idx
+            } else {
+                // File not found in folder — fall back to single-file playlist
+                print("[AudioSipper] playFromRestoredPosition: file not found in folder, using single file")
+                playlist = [url]
+                currentIndex = 0
+            }
+        } else {
+            // Single-file session
+            playlist = [url]
+            currentIndex = 0
+        }
+
+        // Use the playlist URL (which may differ from the bookmark URL in folder mode)
+        let playUrl = playlist[currentIndex]
+
+        // Acquire security-scoped access to the current file
+        let hasAccess = playUrl.startAccessingSecurityScopedResource()
+        if hasAccess {
+            activeFileURL = playUrl
+        }
+
+        // Use the unified playback path
+        let success = setupAudioAndPlay(url: playUrl, seekTo: pendingSeekTime)
+
+        if success {
+            restoredFromSave = false
+            pendingSeekTime = 0
+            print("[AudioSipper] playFromRestoredPosition: state=\(state) — playback started")
+        } else {
+            // Clean up on failure
+            if hasAccess {
+                playUrl.stopAccessingSecurityScopedResource()
+                activeFileURL = nil
+            }
+            statusMessage = "Could not load saved file. It may have been moved."
+            state = .idle
+            restoredFromSave = false
+            currentFileURL = nil
+            SavedPlaybackState.clear()
+            print("[AudioSipper] playFromRestoredPosition: FAILED — file could not be loaded")
+        }
+    }
+
     // MARK: - Private Playback
 
+    /// Plays the file at `currentIndex` in the playlist from the beginning.
+    /// Uses the unified `setupAudioAndPlay` path.
     private func playCurrentFile() {
-        elapsedPlaybackSinceLastPause = 0
-        lastProgressTimestamp = 0
-
         guard currentIndex < playlist.count else {
             advanceOrFinish()
             return
         }
 
         let url = playlist[currentIndex]
-
-        do {
-            let player = try AVAudioPlayer(contentsOf: url)
-            player.delegate = self
-            audioPlayer = player
-            currentFileName = url.lastPathComponent
-            duration = player.duration
-            currentTime = 0
-            player.prepareToPlay()
-            player.play()
-            state = .playing
-            startProgressTimer()
-        } catch {
+        if !setupAudioAndPlay(url: url, seekTo: 0) {
+            // Unplayable file — skip silently and try next
             currentIndex += 1
             playCurrentFile()
         }
@@ -271,6 +568,11 @@ final class LongModePlaybackManager: NSObject, ObservableObject {
 
     /// Called periodically while playing to check if interval pause is needed.
     private func checkIntervalPause() {
+        if justStartedPlayback {
+            justStartedPlayback = false
+            return
+        }
+
         guard state == .playing, let player = audioPlayer else { return }
 
         currentTime = player.currentTime
@@ -331,6 +633,7 @@ final class LongModePlaybackManager: NSObject, ObservableObject {
     private func resumeAfterIntervalPause() {
         guard let player = audioPlayer else { return }
         lastProgressTimestamp = player.currentTime
+        justStartedPlayback = true
         player.play()
         state = .playing
         startProgressTimer()
@@ -395,6 +698,7 @@ final class LongModePlaybackManager: NSObject, ObservableObject {
     private func tearDown() {
         audioPlayer?.stop()
         audioPlayer = nil
+        currentFileURL = nil
         stopAllTimers()
         if let url = activeFolderURL {
             url.stopAccessingSecurityScopedResource()
@@ -423,7 +727,7 @@ final class LongModePlaybackManager: NSObject, ObservableObject {
 extension LongModePlaybackManager: AVAudioPlayerDelegate {
     nonisolated func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
         Task { @MainActor [weak self] in
-            guard let self, self.state == .playing else { return }
+            guard let self else { return }
             self.stopProgressTimer()
             self.currentIndex += 1
 

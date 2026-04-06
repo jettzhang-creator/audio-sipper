@@ -21,7 +21,7 @@ enum LongModeSource: String, CaseIterable {
 
 struct ContentView: View {
 
-    @State private var appMode: AppMode = .short
+    @AppStorage("appMode") private var appMode: AppMode = .short
 
     var body: some View {
         ScrollView {
@@ -89,14 +89,14 @@ struct ShortModeView: View {
     @State private var selectedFolderURL: URL?
     @State private var selectedFolderName: String = ""
 
-    // Settings
-    @State private var includeSubfolders: Bool = false
-    @State private var shufflePlayback: Bool = true
-    @State private var autoReplay: Bool = false
-    @State private var minPauseText: String = "10"
-    @State private var maxPauseText: String = "30"
-    @State private var lastValidMinPause: Int = 10
-    @State private var lastValidMaxPause: Int = 30
+    // Settings (persisted via @AppStorage)
+    @AppStorage("short_includeSubfolders") private var includeSubfolders: Bool = false
+    @AppStorage("short_shufflePlayback") private var shufflePlayback: Bool = true
+    @AppStorage("short_autoReplay") private var autoReplay: Bool = false
+    @AppStorage("short_minPauseText") private var minPauseText: String = "10"
+    @AppStorage("short_maxPauseText") private var maxPauseText: String = "30"
+    @AppStorage("short_lastValidMinPause") private var lastValidMinPause: Int = 10
+    @AppStorage("short_lastValidMaxPause") private var lastValidMaxPause: Int = 30
 
     // Keyboard management
     @FocusState private var minPauseFieldFocused: Bool
@@ -365,7 +365,7 @@ struct LongModeView: View {
     @StateObject private var player = LongModePlaybackManager()
 
     // Source selection
-    @State private var sourceType: LongModeSource = .folder
+    @AppStorage("long_sourceType") private var sourceTypeRaw: String = LongModeSource.folder.rawValue
     @State private var showFolderPicker = false
     @State private var showFilePicker = false
     @State private var selectedFolderURL: URL?
@@ -373,24 +373,24 @@ struct LongModeView: View {
     @State private var selectedFileURL: URL?
     @State private var selectedFileName: String = ""
 
-    // Settings
-    @State private var includeSubfolders: Bool = false
-    @State private var shufflePlayback: Bool = true
-    @State private var autoReplay: Bool = true
+    // Settings (persisted via @AppStorage)
+    @AppStorage("long_includeSubfolders") private var includeSubfolders: Bool = false
+    @AppStorage("long_shufflePlayback") private var shufflePlayback: Bool = true
+    @AppStorage("long_autoReplay") private var autoReplay: Bool = true
 
     // Interval
-    @State private var intervalText: String = "60"
-    @State private var lastValidInterval: Int = 60
+    @AppStorage("long_intervalText") private var intervalText: String = "60"
+    @AppStorage("long_lastValidInterval") private var lastValidInterval: Int = 60
 
     // Within-file pause (Min/Max)
-    @State private var minPauseText: String = "10"
-    @State private var maxPauseText: String = "30"
-    @State private var lastValidMinPause: Int = 10
-    @State private var lastValidMaxPause: Int = 30
+    @AppStorage("long_minPauseText") private var minPauseText: String = "10"
+    @AppStorage("long_maxPauseText") private var maxPauseText: String = "30"
+    @AppStorage("long_lastValidMinPause") private var lastValidMinPause: Int = 10
+    @AppStorage("long_lastValidMaxPause") private var lastValidMaxPause: Int = 30
 
     // Between-files pause (fixed)
-    @State private var betweenFilesPauseText: String = "5"
-    @State private var lastValidBetweenFilesPause: Int = 5
+    @AppStorage("long_betweenFilesPauseText") private var betweenFilesPauseText: String = "5"
+    @AppStorage("long_lastValidBetweenFilesPause") private var lastValidBetweenFilesPause: Int = 5
 
     // Seek bar
     @State private var isSeeking: Bool = false
@@ -405,11 +405,11 @@ struct LongModeView: View {
     // MARK: Computed helpers
 
     private var hasSource: Bool {
-        sourceType == .folder ? selectedFolderURL != nil : selectedFileURL != nil
+        sourceTypeRaw == LongModeSource.folder.rawValue ? selectedFolderURL != nil : selectedFileURL != nil
     }
 
     private var canPlay: Bool {
-        hasSource && (player.state == .idle || player.state == .finished)
+        (hasSource || player.restoredFromSave) && (player.state == .idle || player.state == .finished)
     }
 
     private var isActive: Bool {
@@ -440,6 +440,7 @@ struct LongModeView: View {
                 .animation(.default, value: player.currentFileName)
                 .animation(.default, value: player.countdownSeconds)
         }
+        .onAppear { restoreSavedSession() }
         .toolbar {
             ToolbarItemGroup(placement: .keyboard) {
                 Spacer()
@@ -559,9 +560,9 @@ struct LongModeView: View {
             // Source selector
             VStack(alignment: .leading, spacing: 8) {
                 Text("Source").foregroundColor(.primary)
-                Picker("Source", selection: $sourceType) {
+                Picker("Source", selection: $sourceTypeRaw) {
                     ForEach(LongModeSource.allCases, id: \.self) { s in
-                        Text(s.rawValue).tag(s)
+                        Text(s.rawValue).tag(s.rawValue)
                     }
                 }
                 .pickerStyle(.segmented)
@@ -569,14 +570,14 @@ struct LongModeView: View {
             }
 
             // Source picker button
-            if sourceType == .folder {
+            if sourceTypeRaw == LongModeSource.folder.rawValue {
                 sourceFolderButton
             } else {
                 sourceFileButton
             }
 
             // Subfolder toggle (only for folder)
-            if sourceType == .folder {
+            if sourceTypeRaw == LongModeSource.folder.rawValue {
                 divider
                 Toggle(isOn: $includeSubfolders) {
                     VStack(alignment: .leading, spacing: 2) {
@@ -652,7 +653,7 @@ struct LongModeView: View {
             )
 
             // Between-files pause (folder only)
-            if sourceType == .folder {
+            if sourceTypeRaw == LongModeSource.folder.rawValue {
                 divider
                 HStack(alignment: .center, spacing: 12) {
                     VStack(alignment: .leading, spacing: 2) {
@@ -783,16 +784,54 @@ struct LongModeView: View {
 
     // MARK: Actions
 
+    /// Silently restores a saved session on appear — populates source UI and
+    /// pre-loads file + seek bar. No prompts shown.
+    private func restoreSavedSession() {
+        guard let saved = player.loadSavedSession() else { return }
+
+        // Populate the source selection UI (folder/file URL and name only).
+        // Settings like sourceType, includeSubfolders, shuffle, etc. are
+        // already persisted independently via @AppStorage, so we don't
+        // overwrite them here — the user's latest preference wins.
+        if saved.sourceType == "folder" {
+            if let folderUrl = saved.resolveFolderURL() {
+                selectedFolderURL = folderUrl
+                selectedFolderName = saved.folderName ?? folderUrl.lastPathComponent
+            }
+        } else {
+            if let fileUrl = saved.resolveFileURL() {
+                selectedFileURL = fileUrl
+                selectedFileName = saved.fileName
+            }
+        }
+    }
+
     private func handlePlayPauseTap() {
+        print("[AudioSipper] Play tapped - restored: \(player.restoredFromSave), state: \(player.state)")
+
         if isActive {
             player.togglePlayPause()
+            return
+        }
+
+        // If restored from a saved session, apply current settings then play
+        if player.restoredFromSave {
+            commitAllValues()
+            dismissAllKeyboards()
+            player.applySettings(
+                intervalSeconds: lastValidInterval,
+                minPause: lastValidMinPause,
+                maxPause: max(lastValidMinPause, lastValidMaxPause),
+                autoReplay: autoReplay
+            )
+            player.playFromRestoredPosition()
             return
         }
 
         commitAllValues()
         dismissAllKeyboards()
 
-        if sourceType == .folder {
+        if sourceTypeRaw == LongModeSource.folder.rawValue {
             guard let url = selectedFolderURL else { return }
             player.startFolderSession(
                 folderURL: url,
