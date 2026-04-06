@@ -16,11 +16,14 @@ struct ContentView: View {
     @State private var includeSubfolders: Bool = false
     @State private var shufflePlayback: Bool = true
     @State private var autoReplay: Bool = false
-    @State private var pauseDurationText: String = "3"
-    @State private var lastValidPauseDuration: Int = 3
+    @State private var minPauseText: String = "10"
+    @State private var maxPauseText: String = "30"
+    @State private var lastValidMinPause: Int = 10
+    @State private var lastValidMaxPause: Int = 30
 
     // Keyboard management
-    @FocusState private var pauseFieldFocused: Bool
+    @FocusState private var minPauseFieldFocused: Bool
+    @FocusState private var maxPauseFieldFocused: Bool
 
     // MARK: Computed helpers
 
@@ -71,8 +74,9 @@ struct ContentView: View {
             ToolbarItemGroup(placement: .keyboard) {
                 Spacer()
                 Button("Done") {
-                    pauseFieldFocused = false
-                    commitPauseDuration()
+                    minPauseFieldFocused = false
+                    maxPauseFieldFocused = false
+                    commitPauseValues()
                 }
             }
         }
@@ -203,42 +207,87 @@ struct ContentView: View {
 
             divider
 
-            // Pause duration
-            HStack(alignment: .center, spacing: 12) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Pause Duration")
-                        .foregroundColor(.primary)
-                    Text("Seconds between clips")
+            // Pause length
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Pause Length")
+                    .foregroundColor(.primary)
+
+                HStack(spacing: 12) {
+                    // Min pause
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Min Pause")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                        HStack(spacing: 4) {
+                            TextField("10", text: $minPauseText)
+                                .keyboardType(.numberPad)
+                                .multilineTextAlignment(.center)
+                                .frame(width: 60)
+                                .padding(.vertical, 8)
+                                .padding(.horizontal, 10)
+                                .background(Color(UIColor.tertiarySystemBackground))
+                                .cornerRadius(8)
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 8)
+                                        .stroke(Color(UIColor.separator), lineWidth: 1)
+                                )
+                                .focused($minPauseFieldFocused)
+                                .onSubmit { commitPauseValues() }
+                                .onChange(of: minPauseFieldFocused) {
+                                    if !minPauseFieldFocused { commitPauseValues() }
+                                }
+                                .accessibilityLabel("Minimum pause duration")
+                                .accessibilityValue("\(minPauseText) seconds")
+                            Text("s")
+                                .foregroundColor(.secondary)
+                                .accessibilityHidden(true)
+                        }
+                    }
+
+                    // Max pause
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Max Pause")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                        HStack(spacing: 4) {
+                            TextField("30", text: $maxPauseText)
+                                .keyboardType(.numberPad)
+                                .multilineTextAlignment(.center)
+                                .frame(width: 60)
+                                .padding(.vertical, 8)
+                                .padding(.horizontal, 10)
+                                .background(Color(UIColor.tertiarySystemBackground))
+                                .cornerRadius(8)
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 8)
+                                        .stroke(Color(UIColor.separator), lineWidth: 1)
+                                )
+                                .focused($maxPauseFieldFocused)
+                                .onSubmit { commitPauseValues() }
+                                .onChange(of: maxPauseFieldFocused) {
+                                    if !maxPauseFieldFocused { commitPauseValues() }
+                                }
+                                .accessibilityLabel("Maximum pause duration")
+                                .accessibilityValue("\(maxPauseText) seconds")
+                            Text("s")
+                                .foregroundColor(.secondary)
+                                .accessibilityHidden(true)
+                        }
+                    }
+
+                    Spacer()
+                }
+
+                // Inline error
+                if lastValidMinPause > lastValidMaxPause {
+                    Label("Min must be less than Max", systemImage: "exclamationmark.triangle.fill")
+                        .font(.caption)
+                        .foregroundColor(Color(UIColor.systemOrange))
+                } else {
+                    Text("Set both values equal for fixed pauses")
                         .font(.caption)
                         .foregroundColor(.secondary)
                 }
-
-                Spacer()
-
-                // Text box — invalid input reverts silently to last valid value
-                TextField("3", text: $pauseDurationText)
-                    .keyboardType(.numberPad)
-                    .multilineTextAlignment(.center)
-                    .frame(width: 60)
-                    .padding(.vertical, 8)
-                    .padding(.horizontal, 10)
-                    .background(Color(UIColor.tertiarySystemBackground))
-                    .cornerRadius(8)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 8)
-                            .stroke(Color(UIColor.separator), lineWidth: 1)
-                    )
-                    .focused($pauseFieldFocused)
-                    .onSubmit { commitPauseDuration() }
-                    .onChange(of: pauseFieldFocused) {
-                        if !pauseFieldFocused { commitPauseDuration() }
-                    }
-                    .accessibilityLabel("Pause duration")
-                    .accessibilityValue("\(pauseDurationText) seconds")
-
-                Text("s")
-                    .foregroundColor(.secondary)
-                    .accessibilityHidden(true)
             }
         }
         .padding()
@@ -348,8 +397,9 @@ struct ContentView: View {
 
     private func handlePlayTap() {
         guard let url = selectedFolderURL else { return }
-        commitPauseDuration()
-        pauseFieldFocused = false
+        commitPauseValues()
+        minPauseFieldFocused = false
+        maxPauseFieldFocused = false
 
         if player.state == .paused {
             player.togglePause()          // resume existing session
@@ -357,19 +407,26 @@ struct ContentView: View {
             player.startSession(
                 folderURL: url,
                 recursive: includeSubfolders,
-                pauseDuration: lastValidPauseDuration,
+                minPause: lastValidMinPause,
+                maxPause: max(lastValidMinPause, lastValidMaxPause),
                 shuffle: shufflePlayback,
                 autoReplay: autoReplay
             )
         }
     }
 
-    /// Validates `pauseDurationText`; reverts silently if invalid (non-positive or non-integer).
-    private func commitPauseDuration() {
-        if let value = Int(pauseDurationText.trimmingCharacters(in: .whitespaces)), value > 0 {
-            lastValidPauseDuration = value
+    /// Validates min/max pause text fields; reverts silently to last valid value on invalid input.
+    private func commitPauseValues() {
+        if let value = Int(minPauseText.trimmingCharacters(in: .whitespaces)), value > 0 {
+            lastValidMinPause = value
         } else {
-            pauseDurationText = "\(lastValidPauseDuration)"
+            minPauseText = "\(lastValidMinPause)"
+        }
+
+        if let value = Int(maxPauseText.trimmingCharacters(in: .whitespaces)), value > 0 {
+            lastValidMaxPause = value
+        } else {
+            maxPauseText = "\(lastValidMaxPause)"
         }
     }
 }

@@ -34,7 +34,8 @@ final class AudioPlaybackManager: NSObject, ObservableObject {
     private var playlist: [URL] = []
     private var currentIndex: Int = 0
     private var countdownTimer: Timer?
-    private var pauseDuration: Int = 3
+    private var minPauseDuration: Int = 10
+    private var maxPauseDuration: Int = 30
     var autoReplay: Bool = false
     var shuffle: Bool = true
 
@@ -53,9 +54,10 @@ final class AudioPlaybackManager: NSObject, ObservableObject {
     // MARK: - Public Interface
 
     /// Starts a new session. Tears down any existing one first.
-    func startSession(folderURL: URL, recursive: Bool, pauseDuration: Int, shuffle: Bool, autoReplay: Bool) {
+    func startSession(folderURL: URL, recursive: Bool, minPause: Int, maxPause: Int, shuffle: Bool, autoReplay: Bool) {
         tearDown()
-        self.pauseDuration = pauseDuration
+        self.minPauseDuration = minPause
+        self.maxPauseDuration = maxPause
         self.shuffle = shuffle
         self.autoReplay = autoReplay
         activeFolderURL = folderURL
@@ -158,7 +160,9 @@ final class AudioPlaybackManager: NSObject, ObservableObject {
     }
 
     private func startCountdown(from seconds: Int? = nil) {
-        countdownSeconds = seconds ?? pauseDuration
+        countdownSeconds = seconds ?? (minPauseDuration == maxPauseDuration
+            ? minPauseDuration
+            : Int.random(in: minPauseDuration...maxPauseDuration))
         state = .countdown
         countdownTimer?.invalidate()
 
