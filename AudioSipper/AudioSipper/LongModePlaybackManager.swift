@@ -148,6 +148,10 @@ final class LongModePlaybackManager: NSObject, ObservableObject {
     // Continue mode: track ended during mute
     private var trackEndedDuringMute: Bool = false
 
+    // Continue mode: asymmetric fade durations (computed from intervalSeconds)
+    private var continueFadeOutDuration: TimeInterval { intervalSeconds >= 5 ? 0.9 : 0.5 }
+    private var continueFadeInDuration: TimeInterval { intervalSeconds >= 5 ? 0.6 : 0.3 }
+
     // Source info for save/restore
     private var sourceType: String = "folder"
     private var sourceFolderName: String = ""
@@ -658,16 +662,12 @@ final class LongModePlaybackManager: NSObject, ObservableObject {
             elapsedPlaybackSinceLastPause = 0
 
             if continueMode {
-                // Continue mode: mute volume, keep audio playing, keep progress timer
-                if fadeOutEnabled {
-                    fader.fadeOut(player: player, duration: 0.2) { [weak self] in
-                        guard let self else { return }
-                        self.audioPlayer?.volume = 0.0
-                        self.startMuteCountdown()
-                    }
-                } else {
-                    player.volume = 0.0
-                    startMuteCountdown()
+                // Continue mode: fade out then mute, keep audio playing, keep progress timer.
+                // Fades are always active in Continue mode with asymmetric durations.
+                fader.fadeOut(player: player, duration: continueFadeOutDuration) { [weak self] in
+                    guard let self else { return }
+                    self.audioPlayer?.volume = 0.0
+                    self.startMuteCountdown()
                 }
             } else {
                 // Default mode: pause audio
@@ -770,12 +770,14 @@ final class LongModePlaybackManager: NSObject, ObservableObject {
             audioPlayer?.volume = 1.0
             currentIndex += 1
             advanceOrFinish()
-        } else {
-            // Normal resume: restore volume and continue playing
-            audioPlayer?.volume = 1.0
+        } else if let player = audioPlayer {
+            // Normal resume: fade in and continue playing
             lastWallClockTimestamp = CACurrentMediaTime()
             justStartedPlayback = true
             state = .playing
+            fader.fadeIn(player: player, duration: continueFadeInDuration) {
+                // Fade-in complete — nothing else needed, already in .playing state
+            }
         }
     }
 
