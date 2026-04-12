@@ -110,6 +110,7 @@ final class LongModePlaybackManager: NSObject, ObservableObject {
     var shuffle: Bool = true
     var fadeOutEnabled: Bool = false
     var continueMode: Bool = false
+    var initialOffsetEnabled: Bool = true
 
     // MARK: Private State
 
@@ -147,6 +148,10 @@ final class LongModePlaybackManager: NSObject, ObservableObject {
 
     // Continue mode: track ended during mute
     private var trackEndedDuringMute: Bool = false
+    // Continue mode: initial offset — true until the first mute of a track completes
+    private var isFirstMuteOfTrack: Bool = true
+    // When > 0, a buffer phase follows the initial random mute
+    private var initialOffsetBuffer: Int = 0
 
     // Continue mode: asymmetric fade durations (computed from intervalSeconds)
     private var continueFadeOutDuration: TimeInterval { intervalSeconds >= 5 ? 0.9 : 0.5 }
@@ -226,6 +231,10 @@ final class LongModePlaybackManager: NSObject, ObservableObject {
 
             // Prevent immediate interval pause on first progress tick
             justStartedPlayback = true
+
+            // Reset initial offset for new track (Continue mode)
+            isFirstMuteOfTrack = true
+            initialOffsetBuffer = 0
 
             // Start playback
             print("[AudioSipper] PLAY CALLED for \(url.lastPathComponent)")
@@ -439,6 +448,8 @@ final class LongModePlaybackManager: NSObject, ObservableObject {
         wasPlayingClipWhenPaused = false
         justStartedPlayback = false
         trackEndedDuringMute = false
+        isFirstMuteOfTrack = true
+        initialOffsetBuffer = 0
         elapsedPlaybackSinceLastPause = 0
         lastWallClockTimestamp = 0
         pendingSeekTime = 0
@@ -726,6 +737,8 @@ final class LongModePlaybackManager: NSObject, ObservableObject {
 
     private func resumeAfterIntervalPause() {
         guard let player = audioPlayer else { return }
+        // Ensure volume is restored (may be 0 if coming from initial offset buffer)
+        player.volume = 1.0
         lastWallClockTimestamp = CACurrentMediaTime()
         justStartedPlayback = true
         player.play()
@@ -738,9 +751,27 @@ final class LongModePlaybackManager: NSObject, ObservableObject {
     /// Starts a mute countdown. Audio keeps playing at volume 0.
     /// The progress timer stays active so the seek bar updates.
     private func startMuteCountdown() {
-        let total = minPauseDuration == maxPauseDuration
-            ? minPauseDuration
-            : Int.random(in: minPauseDuration...maxPauseDuration)
+        let total: Int
+
+        if isFirstMuteOfTrack && initialOffsetEnabled && continueMode {
+            // Initial Offset: random first mute between 1 and average mute duration.
+            // After this mute, a buffer phase fills the remainder to reach the average.
+            let avgMute = max(1, (minPauseDuration + maxPauseDuration) / 2)
+            let randomFirst = avgMute > 1 ? Int.random(in: 1...avgMute) : 1
+            initialOffsetBuffer = avgMute - randomFirst
+            total = randomFirst
+            isFirstMuteOfTrack = false
+        } else if initialOffsetBuffer > 0 {
+            // Buffer phase of initial offset — fill remaining silence
+            total = initialOffsetBuffer
+            initialOffsetBuffer = 0
+        } else {
+            // Normal mute duration
+            isFirstMuteOfTrack = false
+            total = minPauseDuration == maxPauseDuration
+                ? minPauseDuration
+                : Int.random(in: minPauseDuration...maxPauseDuration)
+        }
 
         countdownSeconds = total
         trackEndedDuringMute = false
@@ -755,7 +786,16 @@ final class LongModePlaybackManager: NSObject, ObservableObject {
                 if self.countdownSeconds <= 0 {
                     timer.invalidate()
                     self.countdownTimer = nil
-                    self.resumeAfterMute()
+                    if self.initialOffsetBuffer > 0 {
+                        // Buffer phase: pause audio to create the offset,
+                        // then resume after the buffer countdown.
+                        self.audioPlayer?.pause()
+                        self.stopProgressTimer()
+                        self.startCountdown(from: self.initialOffsetBuffer, type: .withinFilePause)
+                        self.initialOffsetBuffer = 0
+                    } else {
+                        self.resumeAfterMute()
+                    }
                 }
             }
         }

@@ -403,6 +403,9 @@ struct LongModeView: View {
     // Fade
     @AppStorage("long_fadeOutEnabled") private var fadeOutEnabled: Bool = false
 
+    // Initial Offset (Continue mode)
+    @AppStorage("long_initialOffsetEnabled") private var initialOffsetEnabled: Bool = true
+
     // Seek bar
     @State private var isSeeking: Bool = false
     @State private var seekValue: Double = 0
@@ -655,6 +658,20 @@ struct LongModeView: View {
                 player.continueMode = (subModeRaw == LongModeSubMode.continueMode.rawValue)
             }
 
+            // Initial Offset (Continue mode only)
+            if subModeRaw == LongModeSubMode.continueMode.rawValue {
+                Toggle(isOn: $initialOffsetEnabled) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Initial Offset").foregroundColor(.primary)
+                        Text("Varies how long the first mute lasts so different parts of a track are heard each time")
+                            .font(.caption).foregroundColor(.secondary)
+                    }
+                }
+                .tint(Color(UIColor.systemBlue))
+                .accessibilityLabel("Initial Offset")
+                .onChange(of: initialOffsetEnabled) { player.initialOffsetEnabled = initialOffsetEnabled }
+            }
+
             divider
 
             // Interval setting
@@ -879,6 +896,7 @@ struct LongModeView: View {
             dismissAllKeyboards()
             player.fadeOutEnabled = fadeOutEnabled
             player.continueMode = (subModeRaw == LongModeSubMode.continueMode.rawValue)
+            player.initialOffsetEnabled = initialOffsetEnabled
             player.applySettings(
                 intervalSeconds: lastValidInterval,
                 minPause: lastValidMinPause,
@@ -893,6 +911,7 @@ struct LongModeView: View {
         dismissAllKeyboards()
         player.fadeOutEnabled = fadeOutEnabled
         player.continueMode = (subModeRaw == LongModeSubMode.continueMode.rawValue)
+        player.initialOffsetEnabled = initialOffsetEnabled
 
         if sourceTypeRaw == LongModeSource.folder.rawValue {
             guard let url = selectedFolderURL else { return }
