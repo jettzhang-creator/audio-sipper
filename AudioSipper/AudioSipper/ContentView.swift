@@ -536,7 +536,7 @@ struct LongModeView: View {
                     title: playPauseLabel,
                     icon: playPauseIcon,
                     style: .primary,
-                    isEnabled: canPlay || isActive,
+                    isEnabled: (canPlay || isActive) && player.state != .withinFilePause,
                     action: handlePlayPauseTap
                 )
 
@@ -832,6 +832,9 @@ struct LongModeView: View {
 
     private func handlePlayPauseTap() {
         print("[AudioSipper] Play tapped - restored: \(player.restoredFromSave), state: \(player.state)")
+
+        // Block taps during automatic rest intervals (safety net alongside .disabled)
+        guard player.state != .withinFilePause else { return }
 
         if isActive {
             player.togglePlayPause()
