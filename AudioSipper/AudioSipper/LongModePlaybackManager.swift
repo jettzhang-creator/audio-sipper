@@ -2,6 +2,7 @@ import Foundation
 
 #if os(iOS)
 import AVFoundation
+import UIKit
 
 // MARK: - Long Mode Playback State
 
@@ -106,9 +107,11 @@ final class LongModePlaybackManager: NSObject, ObservableObject {
 
     var autoReplay: Bool = true
     var shuffle: Bool = true
+    var fadeOutEnabled: Bool = false
 
     // MARK: Private State
 
+    private let fader = AudioFader()
     private var audioPlayer: AVAudioPlayer?
     private var playlist: [URL] = []
     private var currentIndex: Int = 0
@@ -159,6 +162,17 @@ final class LongModePlaybackManager: NSObject, ObservableObject {
         ) { [weak self] _ in
             Task { @MainActor [weak self] in
                 self?.savePlaybackState()
+            }
+        }
+
+        // Force-finish any in-progress fade when app is backgrounded
+        NotificationCenter.default.addObserver(
+            forName: UIApplication.willResignActiveNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.fader.forceFinish()
             }
         }
     }
@@ -309,6 +323,12 @@ final class LongModePlaybackManager: NSObject, ObservableObject {
 
     /// Toggle play/pause — single button behavior per requirements.
     func togglePlayPause() {
+        // If a fade is in progress, cancel it and pause immediately
+        if fader.isFading {
+            fader.cancel()
+            audioPlayer?.volume = 1.0
+        }
+
         switch state {
         case .playing:
             audioPlayer?.pause()
@@ -615,10 +635,19 @@ final class LongModePlaybackManager: NSObject, ObservableObject {
 
         if elapsedPlaybackSinceLastPause >= Double(intervalSeconds) {
             // Trigger within-file pause
-            player.pause()
             stopProgressTimer()
             elapsedPlaybackSinceLastPause = 0
-            startCountdown(from: nil, type: .withinFilePause)
+            if fadeOutEnabled {
+                fader.fadeOut(player: player, duration: 0.2) { [weak self] in
+                    guard let self else { return }
+                    self.audioPlayer?.pause()
+                    self.audioPlayer?.volume = 1.0
+                    self.startCountdown(from: nil, type: .withinFilePause)
+                }
+            } else {
+                player.pause()
+                startCountdown(from: nil, type: .withinFilePause)
+            }
         }
     }
 
@@ -687,6 +716,8 @@ final class LongModePlaybackManager: NSObject, ObservableObject {
     }
 
     private func stopAllTimers() {
+        fader.cancel()
+        audioPlayer?.volume = 1.0
         stopProgressTimer()
         countdownTimer?.invalidate()
         countdownTimer = nil
@@ -723,6 +754,8 @@ final class LongModePlaybackManager: NSObject, ObservableObject {
     // MARK: - Cleanup
 
     private func tearDown() {
+        fader.cancel()
+        audioPlayer?.volume = 1.0
         audioPlayer?.stop()
         audioPlayer = nil
         currentFileURL = nil
