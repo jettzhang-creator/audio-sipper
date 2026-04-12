@@ -10,7 +10,8 @@ enum LongPlaybackState: Equatable {
     case idle
     case playing
     case paused            // User-paused (clip or countdown)
-    case withinFilePause   // Automatic interval pause inside a file
+    case withinFilePause   // Automatic interval pause inside a file (Default mode)
+    case withinFileMute    // Automatic interval mute — audio keeps playing (Continue mode)
     case betweenFiles      // Fixed silence between files
     case finished
 }
@@ -108,6 +109,7 @@ final class LongModePlaybackManager: NSObject, ObservableObject {
     var autoReplay: Bool = true
     var shuffle: Bool = true
     var fadeOutEnabled: Bool = false
+    var continueMode: Bool = false
 
     // MARK: Private State
 
@@ -142,6 +144,9 @@ final class LongModePlaybackManager: NSObject, ObservableObject {
     private var activeFileURL: URL?
     private var wasPlayingClipWhenPaused: Bool = false
     private var justStartedPlayback: Bool = false
+
+    // Continue mode: track ended during mute
+    private var trackEndedDuringMute: Bool = false
 
     // Source info for save/restore
     private var sourceType: String = "folder"
@@ -336,6 +341,17 @@ final class LongModePlaybackManager: NSObject, ObservableObject {
             wasPlayingClipWhenPaused = true
             state = .paused
 
+        case .withinFileMute:
+            // Continue mode mute — pause audio, cancel countdown, restore volume
+            countdownTimer?.invalidate()
+            countdownTimer = nil
+            audioPlayer?.pause()
+            audioPlayer?.volume = 1.0
+            stopProgressTimer()
+            trackEndedDuringMute = false
+            wasPlayingClipWhenPaused = true
+            state = .paused
+
         case .withinFilePause, .betweenFiles:
             countdownTimer?.invalidate()
             countdownTimer = nil
@@ -359,8 +375,10 @@ final class LongModePlaybackManager: NSObject, ObservableObject {
 
     /// Previous: restart current file. If near the beginning (< 3s), go to previous file.
     func previous() {
-        guard state == .playing || state == .paused || state == .withinFilePause || state == .betweenFiles else { return }
+        guard state == .playing || state == .paused || state == .withinFilePause
+                || state == .withinFileMute || state == .betweenFiles else { return }
 
+        trackEndedDuringMute = false
         stopAllTimers()
 
         if currentTime < 3.0 && currentIndex > 0 {
@@ -371,8 +389,10 @@ final class LongModePlaybackManager: NSObject, ObservableObject {
 
     /// Next: skip to next file immediately.
     func next() {
-        guard state == .playing || state == .paused || state == .withinFilePause || state == .betweenFiles else { return }
+        guard state == .playing || state == .paused || state == .withinFilePause
+                || state == .withinFileMute || state == .betweenFiles else { return }
 
+        trackEndedDuringMute = false
         stopAllTimers()
         currentIndex += 1
         advanceOrFinish()
@@ -414,6 +434,7 @@ final class LongModePlaybackManager: NSObject, ObservableObject {
         // 5. Reset internal flags
         wasPlayingClipWhenPaused = false
         justStartedPlayback = false
+        trackEndedDuringMute = false
         elapsedPlaybackSinceLastPause = 0
         lastWallClockTimestamp = 0
         pendingSeekTime = 0
@@ -634,19 +655,34 @@ final class LongModePlaybackManager: NSObject, ObservableObject {
         }
 
         if elapsedPlaybackSinceLastPause >= Double(intervalSeconds) {
-            // Trigger within-file pause
-            stopProgressTimer()
             elapsedPlaybackSinceLastPause = 0
-            if fadeOutEnabled {
-                fader.fadeOut(player: player, duration: 0.2) { [weak self] in
-                    guard let self else { return }
-                    self.audioPlayer?.pause()
-                    self.audioPlayer?.volume = 1.0
-                    self.startCountdown(from: nil, type: .withinFilePause)
+
+            if continueMode {
+                // Continue mode: mute volume, keep audio playing, keep progress timer
+                if fadeOutEnabled {
+                    fader.fadeOut(player: player, duration: 0.2) { [weak self] in
+                        guard let self else { return }
+                        self.audioPlayer?.volume = 0.0
+                        self.startMuteCountdown()
+                    }
+                } else {
+                    player.volume = 0.0
+                    startMuteCountdown()
                 }
             } else {
-                player.pause()
-                startCountdown(from: nil, type: .withinFilePause)
+                // Default mode: pause audio
+                stopProgressTimer()
+                if fadeOutEnabled {
+                    fader.fadeOut(player: player, duration: 0.2) { [weak self] in
+                        guard let self else { return }
+                        self.audioPlayer?.pause()
+                        self.audioPlayer?.volume = 1.0
+                        self.startCountdown(from: nil, type: .withinFilePause)
+                    }
+                } else {
+                    player.pause()
+                    startCountdown(from: nil, type: .withinFilePause)
+                }
             }
         }
     }
@@ -697,6 +733,52 @@ final class LongModePlaybackManager: NSObject, ObservableObject {
         startProgressTimer()
     }
 
+    // MARK: - Continue Mode (Mute Interval)
+
+    /// Starts a mute countdown. Audio keeps playing at volume 0.
+    /// The progress timer stays active so the seek bar updates.
+    private func startMuteCountdown() {
+        let total = minPauseDuration == maxPauseDuration
+            ? minPauseDuration
+            : Int.random(in: minPauseDuration...maxPauseDuration)
+
+        countdownSeconds = total
+        trackEndedDuringMute = false
+        state = .withinFileMute
+        countdownTimer?.invalidate()
+
+        countdownTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] timer in
+            guard self != nil else { timer.invalidate(); return }
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                self.countdownSeconds -= 1
+                if self.countdownSeconds <= 0 {
+                    timer.invalidate()
+                    self.countdownTimer = nil
+                    self.resumeAfterMute()
+                }
+            }
+        }
+    }
+
+    /// Called when the mute countdown finishes.
+    private func resumeAfterMute() {
+        if trackEndedDuringMute {
+            // Track ended while muted — move to next file
+            // (between-files wait was already absorbed by the mute; see delegate)
+            trackEndedDuringMute = false
+            audioPlayer?.volume = 1.0
+            currentIndex += 1
+            advanceOrFinish()
+        } else {
+            // Normal resume: restore volume and continue playing
+            audioPlayer?.volume = 1.0
+            lastWallClockTimestamp = CACurrentMediaTime()
+            justStartedPlayback = true
+            state = .playing
+        }
+    }
+
     // MARK: - Progress Timer
 
     private func startProgressTimer() {
@@ -705,7 +787,15 @@ final class LongModePlaybackManager: NSObject, ObservableObject {
         progressTimer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
             guard self != nil else { return }
             Task { @MainActor [weak self] in
-                self?.checkIntervalPause()
+                guard let self else { return }
+                if self.state == .withinFileMute {
+                    // During mute, just update the seek bar (audio still playing)
+                    if let player = self.audioPlayer {
+                        self.currentTime = player.currentTime
+                    }
+                } else {
+                    self.checkIntervalPause()
+                }
             }
         }
     }
@@ -790,6 +880,22 @@ extension LongModePlaybackManager: AVAudioPlayerDelegate {
             guard let self else { return }
             // If stop() was called, state is .idle and playlist is empty — do nothing.
             guard self.state != .idle else { return }
+
+            if self.state == .withinFileMute {
+                // Track ended while muted (Continue mode).
+                // Compare remaining mute time vs between-files pause — wait for the larger.
+                self.stopProgressTimer()
+                self.trackEndedDuringMute = true
+                let remainingMute = self.countdownSeconds
+                let betweenPause = (self.currentIndex + 1 < self.playlist.count) ? self.betweenFilesPause : 0
+                if betweenPause > remainingMute {
+                    // Extend the countdown to the between-files duration
+                    self.countdownSeconds = betweenPause
+                }
+                // Let the existing mute countdown timer finish and call resumeAfterMute
+                return
+            }
+
             self.stopProgressTimer()
             self.currentIndex += 1
 

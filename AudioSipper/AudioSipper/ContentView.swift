@@ -17,6 +17,13 @@ enum LongModeSource: String, CaseIterable {
     case folder = "Folder"
 }
 
+// MARK: - Long Mode Sub-Mode
+
+enum LongModeSubMode: String, CaseIterable {
+    case defaultMode = "Default"
+    case continueMode = "Continue"
+}
+
 // MARK: - Root View
 
 struct ContentView: View {
@@ -374,6 +381,7 @@ struct LongModeView: View {
     @State private var selectedFileName: String = ""
 
     // Settings (persisted via @AppStorage)
+    @AppStorage("long_subMode") private var subModeRaw: String = LongModeSubMode.defaultMode.rawValue
     @AppStorage("long_includeSubfolders") private var includeSubfolders: Bool = false
     @AppStorage("long_shufflePlayback") private var shufflePlayback: Bool = true
     @AppStorage("long_autoReplay") private var autoReplay: Bool = true
@@ -417,7 +425,8 @@ struct LongModeView: View {
 
     private var isActive: Bool {
         player.state == .playing || player.state == .paused
-            || player.state == .withinFilePause || player.state == .betweenFiles
+            || player.state == .withinFilePause || player.state == .withinFileMute
+            || player.state == .betweenFiles
     }
 
     private var playPauseIcon: String {
@@ -536,7 +545,7 @@ struct LongModeView: View {
                     title: playPauseLabel,
                     icon: playPauseIcon,
                     style: .primary,
-                    isEnabled: (canPlay || isActive) && player.state != .withinFilePause,
+                    isEnabled: (canPlay || isActive) && player.state != .withinFilePause && player.state != .withinFileMute,
                     action: handlePlayPauseTap
                 )
 
@@ -624,6 +633,27 @@ struct LongModeView: View {
             .tint(Color(UIColor.systemBlue))
             .accessibilityLabel("Auto-Replay")
             .onChange(of: autoReplay) { player.autoReplay = autoReplay }
+
+            divider
+
+            // Sub-mode selector
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Interval Mode").foregroundColor(.primary)
+                Text(subModeRaw == LongModeSubMode.continueMode.rawValue
+                     ? "Audio keeps playing but is muted during intervals"
+                     : "Audio pauses during intervals")
+                    .font(.caption).foregroundColor(.secondary)
+                Picker("Interval Mode", selection: $subModeRaw) {
+                    ForEach(LongModeSubMode.allCases, id: \.self) { m in
+                        Text(m.rawValue).tag(m.rawValue)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .accessibilityLabel("Interval mode")
+            }
+            .onChange(of: subModeRaw) {
+                player.continueMode = (subModeRaw == LongModeSubMode.continueMode.rawValue)
+            }
 
             divider
 
@@ -767,9 +797,11 @@ struct LongModeView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
 
-            // Countdown (within-file pause or between-files)
+            // Countdown (within-file pause/mute or between-files)
             if player.state == .withinFilePause {
                 countdownBanner(label: "Pause", seconds: player.countdownSeconds)
+            } else if player.state == .withinFileMute {
+                countdownBanner(label: "Mute", seconds: player.countdownSeconds)
             } else if player.state == .betweenFiles {
                 countdownBanner(label: "Next file in", seconds: player.countdownSeconds)
             }
@@ -833,8 +865,8 @@ struct LongModeView: View {
     private func handlePlayPauseTap() {
         print("[AudioSipper] Play tapped - restored: \(player.restoredFromSave), state: \(player.state)")
 
-        // Block taps during automatic rest intervals (safety net alongside .disabled)
-        guard player.state != .withinFilePause else { return }
+        // Block taps during automatic rest/mute intervals (safety net alongside .disabled)
+        guard player.state != .withinFilePause && player.state != .withinFileMute else { return }
 
         if isActive {
             player.togglePlayPause()
@@ -846,6 +878,7 @@ struct LongModeView: View {
             commitAllValues()
             dismissAllKeyboards()
             player.fadeOutEnabled = fadeOutEnabled
+            player.continueMode = (subModeRaw == LongModeSubMode.continueMode.rawValue)
             player.applySettings(
                 intervalSeconds: lastValidInterval,
                 minPause: lastValidMinPause,
@@ -859,6 +892,7 @@ struct LongModeView: View {
         commitAllValues()
         dismissAllKeyboards()
         player.fadeOutEnabled = fadeOutEnabled
+        player.continueMode = (subModeRaw == LongModeSubMode.continueMode.rawValue)
 
         if sourceTypeRaw == LongModeSource.folder.rawValue {
             guard let url = selectedFolderURL else { return }
