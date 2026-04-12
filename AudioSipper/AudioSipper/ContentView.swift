@@ -392,6 +392,9 @@ struct LongModeView: View {
     @AppStorage("long_betweenFilesPauseText") private var betweenFilesPauseText: String = "5"
     @AppStorage("long_lastValidBetweenFilesPause") private var lastValidBetweenFilesPause: Int = 5
 
+    // Fade
+    @AppStorage("long_fadeOutEnabled") private var fadeOutEnabled: Bool = false
+
     // Seek bar
     @State private var isSeeking: Bool = false
     @State private var seekValue: Double = 0
@@ -686,6 +689,19 @@ struct LongModeView: View {
                     Text("s").foregroundColor(.secondary).accessibilityHidden(true)
                 }
             }
+
+            divider
+
+            // Fade-out toggle
+            Toggle(isOn: $fadeOutEnabled) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Fade-Out on Pause").foregroundColor(.primary)
+                    Text("200ms fade before pause intervals").font(.caption).foregroundColor(.secondary)
+                }
+            }
+            .tint(Color(UIColor.systemBlue))
+            .accessibilityLabel("Fade-Out on Pause")
+            .onChange(of: fadeOutEnabled) { player.fadeOutEnabled = fadeOutEnabled }
         }
         .padding()
         .background(Color(UIColor.secondarySystemBackground))
@@ -826,6 +842,7 @@ struct LongModeView: View {
         if player.restoredFromSave {
             commitAllValues()
             dismissAllKeyboards()
+            player.fadeOutEnabled = fadeOutEnabled
             player.applySettings(
                 intervalSeconds: lastValidInterval,
                 minPause: lastValidMinPause,
@@ -838,6 +855,7 @@ struct LongModeView: View {
 
         commitAllValues()
         dismissAllKeyboards()
+        player.fadeOutEnabled = fadeOutEnabled
 
         if sourceTypeRaw == LongModeSource.folder.rawValue {
             guard let url = selectedFolderURL else { return }
