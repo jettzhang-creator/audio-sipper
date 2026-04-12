@@ -433,12 +433,14 @@ struct LongModeView: View {
     }
 
     private var playPauseIcon: String {
-        player.state == .playing ? "pause.fill" : "play.fill"
+        // Mute interval: audio still playing (muted) — show Pause icon
+        (player.state == .playing || player.state == .withinFileMute) ? "pause.fill" : "play.fill"
     }
 
     private var playPauseLabel: String {
         switch player.state {
         case .playing: return "Pause"
+        case .withinFileMute: return "Pause"
         case .paused: return "Resume"
         default: return "Play"
         }
@@ -737,18 +739,20 @@ struct LongModeView: View {
                 }
             }
 
-            divider
+            // Fade-out toggle (Default mode only — Continue mode has its own fades)
+            if subModeRaw == LongModeSubMode.defaultMode.rawValue {
+                divider
 
-            // Fade-out toggle
-            Toggle(isOn: $fadeOutEnabled) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Fade-Out on Pause").foregroundColor(.primary)
-                    Text("200ms fade before pause intervals").font(.caption).foregroundColor(.secondary)
+                Toggle(isOn: $fadeOutEnabled) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Fade-Out on Pause").foregroundColor(.primary)
+                        Text("200ms fade before pause intervals").font(.caption).foregroundColor(.secondary)
+                    }
                 }
+                .tint(Color(UIColor.systemBlue))
+                .accessibilityLabel("Fade-Out on Pause")
+                .onChange(of: fadeOutEnabled) { player.fadeOutEnabled = fadeOutEnabled }
             }
-            .tint(Color(UIColor.systemBlue))
-            .accessibilityLabel("Fade-Out on Pause")
-            .onChange(of: fadeOutEnabled) { player.fadeOutEnabled = fadeOutEnabled }
         }
         .padding()
         .background(Color(UIColor.secondarySystemBackground))
