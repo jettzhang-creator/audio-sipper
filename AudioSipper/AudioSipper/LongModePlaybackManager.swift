@@ -140,6 +140,9 @@ final class LongModePlaybackManager: NSObject, ObservableObject {
     private var elapsedPlaybackSinceLastPause: TimeInterval = 0
     private var lastWallClockTimestamp: CFTimeInterval = 0
 
+    // Playback setup lock — prevents re-entrant or duplicate calls to setupAudioAndPlay
+    private var isStartingPlayback: Bool = false
+
     // Pause/resume bookkeeping
     private var activeFolderURL: URL?
     private var activeFileURL: URL?
@@ -201,6 +204,14 @@ final class LongModePlaybackManager: NSObject, ObservableObject {
     /// - Returns: `true` if playback started successfully.
     @discardableResult
     private func setupAudioAndPlay(url: URL, seekTo: TimeInterval = 0) -> Bool {
+        // Re-entrancy guard — prevents duplicate overlapping playback setup
+        guard !isStartingPlayback else {
+            print("[AudioSipper] setupAudioAndPlay: BLOCKED — already starting playback for \(url.lastPathComponent)")
+            return false
+        }
+        isStartingPlayback = true
+        defer { isStartingPlayback = false }
+
         // Tear down any existing player (but NOT security-scoped access)
         audioPlayer?.stop()
         audioPlayer = nil
@@ -836,12 +847,12 @@ final class LongModePlaybackManager: NSObject, ObservableObject {
             guard self != nil else { return }
             Task { @MainActor [weak self] in
                 guard let self else { return }
-                if self.state == .withinFileMute {
-                    // During mute, just update the seek bar (audio still playing)
-                    if let player = self.audioPlayer {
-                        self.currentTime = player.currentTime
-                    }
-                } else {
+                // Always sync the seek bar from the player's actual position,
+                // regardless of state, so the UI never freezes.
+                if let player = self.audioPlayer {
+                    self.currentTime = player.currentTime
+                }
+                if self.state != .withinFileMute {
                     self.checkIntervalPause()
                 }
             }
@@ -926,6 +937,7 @@ extension LongModePlaybackManager: AVAudioPlayerDelegate {
     nonisolated func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
         Task { @MainActor [weak self] in
             guard let self else { return }
+            print("[AudioSipper] audioPlayerDidFinishPlaying: state=\(self.state) successfully=\(flag)")
             // Only handle natural track completion from states where it makes sense.
             // This prevents double-fires (AVAudioPlayer can occasionally fire the
             // delegate twice) from double-advancing the index or spawning duplicate timers.
