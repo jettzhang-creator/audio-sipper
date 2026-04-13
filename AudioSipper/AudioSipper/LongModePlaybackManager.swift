@@ -226,12 +226,13 @@ final class LongModePlaybackManager: NSObject, ObservableObject {
             duration = player.duration
             player.prepareToPlay()
 
-            // Seek if needed
+            // Seek if needed — do NOT set currentTime here; the progress timer
+            // is the single source of truth and will read player.currentTime on its
+            // next tick (within 0.25 s).
             let clampedSeek = min(max(seekTo, 0), player.duration)
             if clampedSeek > 0 {
                 player.currentTime = clampedSeek
             }
-            currentTime = clampedSeek
 
             // Reset interval tracking — fresh timer from this point
             elapsedPlaybackSinceLastPause = 0
@@ -427,7 +428,7 @@ final class LongModePlaybackManager: NSObject, ObservableObject {
         guard let player = audioPlayer else { return }
         let clamped = min(max(time, 0), player.duration)
         player.currentTime = clamped
-        currentTime = clamped
+        // Do NOT set currentTime here — the progress timer is the single source of truth.
         // Do NOT reset the interval timer on seek — per requirements
     }
 
@@ -667,8 +668,7 @@ final class LongModePlaybackManager: NSObject, ObservableObject {
 
         guard state == .playing, let player = audioPlayer else { return }
 
-        // Update the seek bar position from the audio player
-        currentTime = player.currentTime
+        // currentTime is maintained exclusively by the progress timer — no write here.
 
         // Track elapsed time using wall clock so seeking doesn't affect it
         let now = CACurrentMediaTime()
