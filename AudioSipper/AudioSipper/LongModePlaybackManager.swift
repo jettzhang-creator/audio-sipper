@@ -726,10 +726,13 @@ final class LongModePlaybackManager: NSObject, ObservableObject {
                     timer.invalidate()
                     self.countdownTimer = nil
                     if type == .withinFilePause {
+                        // Guard: bail if state changed while the timer was running
+                        guard self.state == .withinFilePause else { return }
                         self.resumeAfterIntervalPause()
                     } else {
-                        // Between files — play next
-                        self.playCurrentFile()
+                        // Between files — guard, then use the single canonical "play next" path
+                        guard self.state == .betweenFiles else { return }
+                        self.advanceOrFinish()
                     }
                 }
             }
@@ -787,6 +790,8 @@ final class LongModePlaybackManager: NSObject, ObservableObject {
                 if self.countdownSeconds <= 0 {
                     timer.invalidate()
                     self.countdownTimer = nil
+                    // Guard: bail if state changed (e.g. user paused) while the timer was running
+                    guard self.state == .withinFileMute else { return }
                     if self.initialOffsetBuffer > 0 {
                         // Buffer phase: pause audio to create the offset,
                         // then resume after the buffer countdown.
@@ -921,8 +926,10 @@ extension LongModePlaybackManager: AVAudioPlayerDelegate {
     nonisolated func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
         Task { @MainActor [weak self] in
             guard let self else { return }
-            // If stop() was called, state is .idle and playlist is empty — do nothing.
-            guard self.state != .idle else { return }
+            // Only handle natural track completion from states where it makes sense.
+            // This prevents double-fires (AVAudioPlayer can occasionally fire the
+            // delegate twice) from double-advancing the index or spawning duplicate timers.
+            guard self.state == .playing || self.state == .withinFileMute else { return }
 
             if self.state == .withinFileMute {
                 // Track ended while muted (Continue mode).
@@ -939,7 +946,8 @@ extension LongModePlaybackManager: AVAudioPlayerDelegate {
                 return
             }
 
-            self.stopProgressTimer()
+            // Cancel every in-flight timer/fader before scheduling a new one.
+            self.stopAllTimers()
             self.currentIndex += 1
 
             if self.currentIndex < self.playlist.count && self.betweenFilesPause > 0 {
