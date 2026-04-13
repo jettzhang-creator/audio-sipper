@@ -226,13 +226,14 @@ final class LongModePlaybackManager: NSObject, ObservableObject {
             duration = player.duration
             player.prepareToPlay()
 
-            // Seek if needed — do NOT set currentTime here; the progress timer
-            // is the single source of truth and will read player.currentTime on its
-            // next tick (within 0.25 s).
+            // Seek if needed. Set currentTime immediately so the UI shows the correct
+            // position on the very first frame — no 250ms gap waiting for the first tick.
+            // The synchronous timer will confirm this value on every subsequent tick.
             let clampedSeek = min(max(seekTo, 0), player.duration)
             if clampedSeek > 0 {
                 player.currentTime = clampedSeek
             }
+            currentTime = clampedSeek
 
             // Reset interval tracking — fresh timer from this point
             elapsedPlaybackSinceLastPause = 0
@@ -428,7 +429,11 @@ final class LongModePlaybackManager: NSObject, ObservableObject {
         guard let player = audioPlayer else { return }
         let clamped = min(max(time, 0), player.duration)
         player.currentTime = clamped
-        // Do NOT set currentTime here — the progress timer is the single source of truth.
+        // Write currentTime immediately for instant UI feedback during scrubbing.
+        // With the synchronous timer (MainActor.assumeIsolated), there is no async
+        // task queue that could deliver a stale value on top of this write — the
+        // next timer tick reads player.currentTime which will already be `clamped`.
+        currentTime = clamped
         // Do NOT reset the interval timer on seek — per requirements
     }
 
@@ -844,11 +849,14 @@ final class LongModePlaybackManager: NSObject, ObservableObject {
         stopProgressTimer()
         lastWallClockTimestamp = CACurrentMediaTime()
         progressTimer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
-            guard self != nil else { return }
-            Task { @MainActor [weak self] in
-                guard let self else { return }
-                // Always sync the seek bar from the player's actual position,
-                // regardless of state, so the UI never freezes.
+            // The timer fires on RunLoop.main (this function is @MainActor, so the RunLoop
+            // that schedules the timer IS the main RunLoop). assumeIsolated executes the
+            // closure synchronously on the current thread without any async task queuing.
+            // This is intentionally NOT `Task { @MainActor }` — that pattern enqueues an
+            // async task, which can pile up under load and deliver stale/burst updates.
+            guard let self else { return }
+            MainActor.assumeIsolated {
+                // Single source of truth: always read from the player, every tick.
                 if let player = self.audioPlayer {
                     self.currentTime = player.currentTime
                 }
