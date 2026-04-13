@@ -531,10 +531,11 @@ final class LongModePlaybackManager: NSObject, ObservableObject {
     }
 
     /// Applies settings before resuming from a restored session.
-    func applySettings(intervalSeconds: Int, minPause: Int, maxPause: Int, autoReplay: Bool) {
+    func applySettings(intervalSeconds: Int, minPause: Int, maxPause: Int, betweenFilesPause: Int, autoReplay: Bool) {
         self.intervalSeconds = intervalSeconds
         self.minPauseDuration = minPause
         self.maxPauseDuration = maxPause
+        self.betweenFilesPause = betweenFilesPause
         self.autoReplay = autoReplay
     }
 

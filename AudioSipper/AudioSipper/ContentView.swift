@@ -905,6 +905,7 @@ struct LongModeView: View {
                 intervalSeconds: lastValidInterval,
                 minPause: lastValidMinPause,
                 maxPause: max(lastValidMinPause, lastValidMaxPause),
+                betweenFilesPause: lastValidBetweenFilesPause,
                 autoReplay: autoReplay
             )
             player.playFromRestoredPosition()
