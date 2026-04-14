@@ -679,8 +679,8 @@ struct LongModeView: View {
             // Interval setting
             HStack(alignment: .center, spacing: 12) {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Pause Interval").foregroundColor(.primary)
-                    Text("Insert a pause every X seconds").font(.caption).foregroundColor(.secondary)
+                    Text(subModeRaw == LongModeSubMode.continueMode.rawValue ? "Mute Interval" : "Pause Interval").foregroundColor(.primary)
+                    Text(subModeRaw == LongModeSubMode.continueMode.rawValue ? "Insert a mute every X seconds" : "Insert a pause every X seconds").font(.caption).foregroundColor(.secondary)
                 }
                 Spacer()
                 TextField("60", text: $intervalText)
@@ -702,14 +702,15 @@ struct LongModeView: View {
 
             divider
 
-            // Within-file pause duration (Min/Max) — shared component
+            // Within-file pause/mute duration (Min/Max) — shared component
             PauseLengthEditor(
                 minPauseText: $minPauseText,
                 maxPauseText: $maxPauseText,
                 lastValidMinPause: $lastValidMinPause,
                 lastValidMaxPause: $lastValidMaxPause,
                 minPauseFieldFocused: $minPauseFieldFocused,
-                maxPauseFieldFocused: $maxPauseFieldFocused
+                maxPauseFieldFocused: $maxPauseFieldFocused,
+                isMuteMode: subModeRaw == LongModeSubMode.continueMode.rawValue
             )
 
             // Between-files pause (folder only)
@@ -746,7 +747,7 @@ struct LongModeView: View {
                 Toggle(isOn: $fadeOutEnabled) {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Fade-Out on Pause").foregroundColor(.primary)
-                        Text("200ms fade before pause intervals").font(.caption).foregroundColor(.secondary)
+                        Text("500ms fade before pause intervals").font(.caption).foregroundColor(.secondary)
                     }
                 }
                 .tint(Color(UIColor.systemBlue))
@@ -982,14 +983,15 @@ struct PauseLengthEditor: View {
     @Binding var lastValidMaxPause: Int
     var minPauseFieldFocused: FocusState<Bool>.Binding
     var maxPauseFieldFocused: FocusState<Bool>.Binding
+    var isMuteMode: Bool = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Pause Length").foregroundColor(.primary)
+            Text(isMuteMode ? "Mute Length" : "Pause Length").foregroundColor(.primary)
 
             HStack(spacing: 12) {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("Min Pause").font(.caption).foregroundColor(.secondary)
+                    Text(isMuteMode ? "Min Mute" : "Min Pause").font(.caption).foregroundColor(.secondary)
                     HStack(spacing: 4) {
                         TextField("10", text: $minPauseText)
                             .keyboardType(.numberPad)
@@ -1003,14 +1005,14 @@ struct PauseLengthEditor: View {
                             .focused(minPauseFieldFocused)
                             .onSubmit { commitValues() }
                             .onChange(of: minPauseFieldFocused.wrappedValue) { if !minPauseFieldFocused.wrappedValue { commitValues() } }
-                            .accessibilityLabel("Minimum pause duration")
+                            .accessibilityLabel(isMuteMode ? "Minimum mute duration" : "Minimum pause duration")
                             .accessibilityValue("\(minPauseText) seconds")
                         Text("s").foregroundColor(.secondary).accessibilityHidden(true)
                     }
                 }
 
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("Max Pause").font(.caption).foregroundColor(.secondary)
+                    Text(isMuteMode ? "Max Mute" : "Max Pause").font(.caption).foregroundColor(.secondary)
                     HStack(spacing: 4) {
                         TextField("30", text: $maxPauseText)
                             .keyboardType(.numberPad)
@@ -1024,7 +1026,7 @@ struct PauseLengthEditor: View {
                             .focused(maxPauseFieldFocused)
                             .onSubmit { commitValues() }
                             .onChange(of: maxPauseFieldFocused.wrappedValue) { if !maxPauseFieldFocused.wrappedValue { commitValues() } }
-                            .accessibilityLabel("Maximum pause duration")
+                            .accessibilityLabel(isMuteMode ? "Maximum mute duration" : "Maximum pause duration")
                             .accessibilityValue("\(maxPauseText) seconds")
                         Text("s").foregroundColor(.secondary).accessibilityHidden(true)
                     }

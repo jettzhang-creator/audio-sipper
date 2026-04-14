@@ -701,7 +701,7 @@ final class LongModePlaybackManager: NSObject, ObservableObject {
                 // Default mode: pause audio
                 stopProgressTimer()
                 if fadeOutEnabled {
-                    fader.fadeOut(player: player, duration: 0.2) { [weak self] in
+                    fader.fadeOut(player: player, duration: 0.5) { [weak self] in
                         guard let self else { return }
                         self.audioPlayer?.pause()
                         self.audioPlayer?.volume = 1.0
