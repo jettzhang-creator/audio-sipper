@@ -126,7 +126,9 @@ final class LongModePlaybackManager: NSObject, ObservableObject {
     private var pendingSeekTime: TimeInterval = 0
 
     // Timers
-    private var countdownTimer: Timer?
+    // countdownTimer uses DispatchSourceTimer so it keeps ticking in the background.
+    // progressTimer uses RunLoop Timer (UI updates only matter in foreground).
+    private var countdownTimer: DispatchSourceTimer?
     private var intervalTimer: Timer?
     private var progressTimer: Timer?
 
@@ -165,6 +167,11 @@ final class LongModePlaybackManager: NSObject, ObservableObject {
     private var sourceFolderName: String = ""
     private var sourceIncludeSubfolders: Bool = false
 
+    // Background / interruption bookkeeping
+    /// The state the manager was in before an audio interruption (call, Siri, etc.)
+    /// so we know whether to resume when the interruption ends.
+    private var stateBeforeInterruption: LongPlaybackState?
+
     // MARK: Init
 
     override init() {
@@ -190,6 +197,28 @@ final class LongModePlaybackManager: NSObject, ObservableObject {
         ) { [weak self] _ in
             Task { @MainActor [weak self] in
                 self?.fader.forceFinish()
+            }
+        }
+
+        // Audio interruption handling (phone calls, Siri, alarms, etc.)
+        NotificationCenter.default.addObserver(
+            forName: AVAudioSession.interruptionNotification,
+            object: AVAudioSession.sharedInstance(),
+            queue: .main
+        ) { [weak self] notification in
+            Task { @MainActor [weak self] in
+                self?.handleInterruption(notification)
+            }
+        }
+
+        // Route change handling (headphone unplug, Bluetooth disconnect)
+        NotificationCenter.default.addObserver(
+            forName: AVAudioSession.routeChangeNotification,
+            object: AVAudioSession.sharedInstance(),
+            queue: .main
+        ) { [weak self] notification in
+            Task { @MainActor [weak self] in
+                self?.handleRouteChange(notification)
             }
         }
     }
@@ -369,8 +398,7 @@ final class LongModePlaybackManager: NSObject, ObservableObject {
 
         case .withinFileMute:
             // Continue mode mute — pause audio, cancel countdown, restore volume
-            countdownTimer?.invalidate()
-            countdownTimer = nil
+            cancelCountdownTimer()
             audioPlayer?.pause()
             audioPlayer?.volume = 1.0
             stopProgressTimer()
@@ -379,8 +407,7 @@ final class LongModePlaybackManager: NSObject, ObservableObject {
             state = .paused
 
         case .withinFilePause, .betweenFiles:
-            countdownTimer?.invalidate()
-            countdownTimer = nil
+            cancelCountdownTimer()
             wasPlayingClipWhenPaused = false
             state = .paused
 
@@ -731,28 +758,29 @@ final class LongModePlaybackManager: NSObject, ObservableObject {
 
         countdownSeconds = total
         state = type
-        countdownTimer?.invalidate()
+        cancelCountdownTimer()
 
-        countdownTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] timer in
-            guard self != nil else { timer.invalidate(); return }
-            Task { @MainActor [weak self] in
-                guard let self else { return }
+        // DispatchSourceTimer keeps firing in the background (unlike RunLoop Timer).
+        let timer = DispatchSource.makeTimerSource(queue: .main)
+        timer.schedule(deadline: .now() + 1.0, repeating: 1.0)
+        timer.setEventHandler { [weak self] in
+            guard let self else { return }
+            MainActor.assumeIsolated {
                 self.countdownSeconds -= 1
                 if self.countdownSeconds <= 0 {
-                    timer.invalidate()
-                    self.countdownTimer = nil
+                    self.cancelCountdownTimer()
                     if type == .withinFilePause {
-                        // Guard: bail if state changed while the timer was running
                         guard self.state == .withinFilePause else { return }
                         self.resumeAfterIntervalPause()
                     } else {
-                        // Between files — guard, then use the single canonical "play next" path
                         guard self.state == .betweenFiles else { return }
                         self.advanceOrFinish()
                     }
                 }
             }
         }
+        countdownTimer = timer
+        timer.resume()
     }
 
     private func resumeAfterIntervalPause() {
@@ -796,21 +824,18 @@ final class LongModePlaybackManager: NSObject, ObservableObject {
         countdownSeconds = total
         trackEndedDuringMute = false
         state = .withinFileMute
-        countdownTimer?.invalidate()
+        cancelCountdownTimer()
 
-        countdownTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] timer in
-            guard self != nil else { timer.invalidate(); return }
-            Task { @MainActor [weak self] in
-                guard let self else { return }
+        let timer = DispatchSource.makeTimerSource(queue: .main)
+        timer.schedule(deadline: .now() + 1.0, repeating: 1.0)
+        timer.setEventHandler { [weak self] in
+            guard let self else { return }
+            MainActor.assumeIsolated {
                 self.countdownSeconds -= 1
                 if self.countdownSeconds <= 0 {
-                    timer.invalidate()
-                    self.countdownTimer = nil
-                    // Guard: bail if state changed (e.g. user paused) while the timer was running
+                    self.cancelCountdownTimer()
                     guard self.state == .withinFileMute else { return }
                     if self.initialOffsetBuffer > 0 {
-                        // Buffer phase: pause audio to create the offset,
-                        // then resume after the buffer countdown.
                         self.audioPlayer?.pause()
                         self.stopProgressTimer()
                         self.startCountdown(from: self.initialOffsetBuffer, type: .withinFilePause)
@@ -821,6 +846,8 @@ final class LongModePlaybackManager: NSObject, ObservableObject {
                 }
             }
         }
+        countdownTimer = timer
+        timer.resume()
     }
 
     /// Called when the mute countdown finishes.
@@ -876,7 +903,13 @@ final class LongModePlaybackManager: NSObject, ObservableObject {
         fader.cancel()
         audioPlayer?.volume = 1.0
         stopProgressTimer()
-        countdownTimer?.invalidate()
+        cancelCountdownTimer()
+    }
+
+    /// Cancels the DispatchSourceTimer used for countdowns.
+    /// DispatchSourceTimer must be cancelled (not invalidated like RunLoop Timer).
+    private func cancelCountdownTimer() {
+        countdownTimer?.cancel()
         countdownTimer = nil
     }
 
@@ -935,6 +968,67 @@ final class LongModePlaybackManager: NSObject, ObservableObject {
             try AVAudioSession.sharedInstance().setActive(true)
         } catch {
             print("[AudioSipper] AVAudioSession setup failed: \(error)")
+        }
+    }
+
+    // MARK: - Interruption & Route Change Handling
+
+    /// Handles audio session interruptions (phone calls, Siri, alarms).
+    /// On .began: pauses playback via togglePlayPause.
+    /// On .ended with shouldResume: resumes via togglePlayPause.
+    private func handleInterruption(_ notification: Notification) {
+        guard let userInfo = notification.userInfo,
+              let typeValue = userInfo[AVAudioSessionInterruptionTypeKey] as? UInt,
+              let type = AVAudioSession.InterruptionType(rawValue: typeValue) else {
+            return
+        }
+
+        switch type {
+        case .began:
+            print("[AudioSipper] Audio interruption began — state=\(state)")
+            // Remember what state we were in so we can decide whether to resume
+            stateBeforeInterruption = state
+            // Pause using existing logic (preserves all bookkeeping)
+            if state == .playing || state == .withinFileMute {
+                togglePlayPause()
+            }
+
+        case .ended:
+            print("[AudioSipper] Audio interruption ended — stateBeforeInterruption=\(String(describing: stateBeforeInterruption))")
+            let shouldResume: Bool
+            if let optionsValue = userInfo[AVAudioSessionInterruptionOptionKey] as? UInt {
+                shouldResume = AVAudioSession.InterruptionOptions(rawValue: optionsValue).contains(.shouldResume)
+            } else {
+                shouldResume = false
+            }
+
+            if shouldResume, state == .paused,
+               stateBeforeInterruption == .playing || stateBeforeInterruption == .withinFileMute {
+                // Reactivate the audio session (may have been deactivated by the interruption)
+                try? AVAudioSession.sharedInstance().setActive(true)
+                togglePlayPause()
+            }
+            stateBeforeInterruption = nil
+
+        @unknown default:
+            break
+        }
+    }
+
+    /// Handles audio route changes (headphone unplug, Bluetooth disconnect).
+    /// Pauses playback when the old output device becomes unavailable.
+    private func handleRouteChange(_ notification: Notification) {
+        guard let userInfo = notification.userInfo,
+              let reasonValue = userInfo[AVAudioSessionRouteChangeReasonKey] as? UInt,
+              let reason = AVAudioSession.RouteChangeReason(rawValue: reasonValue) else {
+            return
+        }
+
+        if reason == .oldDeviceUnavailable {
+            print("[AudioSipper] Route change: old device unavailable (headphones unplugged) — state=\(state)")
+            if state == .playing || state == .withinFileMute {
+                togglePlayPause()
+            }
         }
     }
 }
