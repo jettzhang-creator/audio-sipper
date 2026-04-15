@@ -159,6 +159,15 @@ final class LongModePlaybackManager: NSObject, ObservableObject {
     // When > 0, a buffer phase follows the initial random mute
     private var initialOffsetBuffer: Int = 0
 
+    // Silent loop — keeps the iOS audio session alive during Default-mode interval pauses
+    // and between-files waits, replacing the 0.001 volume approach for those states.
+    // Continue-mode mutes (withinFileMute) keep the real player running so that
+    // audioPlayerDidFinishPlaying still fires when a track ends mid-mute.
+    private var silentLoopFileURL: URL?       // Temp-dir WAV of 1-second silence
+    private var preSilenceFileURL: URL?       // Real file URL saved before loop started
+    private var preSilencePosition: TimeInterval = 0  // Real audio position at loop start
+    private var isSilentLoopActive: Bool = false
+
     // Continue mode: asymmetric fade durations (computed from intervalSeconds)
     private var continueFadeOutDuration: TimeInterval { intervalSeconds >= 5 ? 0.9 : 0.5 }
     private var continueFadeInDuration: TimeInterval { intervalSeconds >= 5 ? 0.6 : 0.3 }
@@ -222,6 +231,9 @@ final class LongModePlaybackManager: NSObject, ObservableObject {
                 self?.handleRouteChange(notification)
             }
         }
+
+        // Pre-build the silent WAV once; reused across all silent-loop activations.
+        silentLoopFileURL = Self.createSilentAudioFile()
     }
 
     // MARK: - Unified Audio Setup
@@ -242,7 +254,12 @@ final class LongModePlaybackManager: NSObject, ObservableObject {
         isStartingPlayback = true
         defer { isStartingPlayback = false }
 
-        // Tear down any existing player (but NOT security-scoped access)
+        // Tear down any existing player (but NOT security-scoped access).
+        // Nil the delegate first so a completing player cannot fire audioPlayerDidFinishPlaying
+        // while we are mid-swap. This also cleanly stops any active silent loop.
+        isSilentLoopActive = false
+        preSilenceFileURL = nil
+        audioPlayer?.delegate = nil
         audioPlayer?.stop()
         audioPlayer = nil
         stopAllTimers()
@@ -789,19 +806,19 @@ final class LongModePlaybackManager: NSObject, ObservableObject {
                     self.startMuteCountdown()
                 }
             } else {
-                // Default mode: keep player running at near-silence and start
-                // the interval countdown. Do NOT call pause() — iOS revokes background
-                // execution when audio stops; volume 0.001 is inaudible but keeps the
-                // audio session active.
+                // Default mode: switch to a looping silent player and start the interval
+                // countdown. The silent loop keeps the iOS audio session active without
+                // producing any audible signal. The real player's position is saved so
+                // resumeAfterIntervalPause can reload from exactly where we left off.
                 stopProgressTimer()
                 if fadeOutEnabled {
                     fader.fadeOut(player: player, duration: 0.5) { [weak self] in
                         guard let self else { return }
-                        self.audioPlayer?.volume = 0.001
+                        self.startSilentLoop()
                         self.startCountdown(from: nil, type: .withinFilePause)
                     }
                 } else {
-                    player.volume = 0.001
+                    startSilentLoop()
                     startCountdown(from: nil, type: .withinFilePause)
                 }
             }
@@ -850,8 +867,18 @@ final class LongModePlaybackManager: NSObject, ObservableObject {
     }
 
     private func resumeAfterIntervalPause() {
+        if isSilentLoopActive {
+            // Silent loop was substituted during the pause — reload the real file from
+            // the exact position at which the pause started.
+            isSilentLoopActive = false
+            guard let url = preSilenceFileURL else { return }
+            let savedPos = preSilencePosition
+            preSilenceFileURL = nil
+            setupAudioAndPlay(url: url, seekTo: savedPos)
+            return
+        }
+
         guard let player = audioPlayer else { return }
-        // Ensure volume is restored (may be 0.001 if coming from initial offset buffer)
         player.volume = 1.0
         lastWallClockTimestamp = CACurrentMediaTime()
         justStartedPlayback = true
@@ -904,9 +931,9 @@ final class LongModePlaybackManager: NSObject, ObservableObject {
                     self.cancelCountdownTimer()
                     guard self.state == .withinFileMute else { return }
                     if self.initialOffsetBuffer > 0 {
-                        // Keep player running at near-silence — do NOT call pause() here.
-                        // iOS revokes background execution when audio stops.
-                        self.audioPlayer?.volume = 0.001
+                        // Buffer phase: switch to silent loop (same mechanism as Default-mode
+                        // interval pause) then countdown the remainder.
+                        self.startSilentLoop()
                         self.stopProgressTimer()
                         self.startCountdown(from: self.initialOffsetBuffer, type: .withinFilePause)
                         self.initialOffsetBuffer = 0
@@ -955,7 +982,9 @@ final class LongModePlaybackManager: NSObject, ObservableObject {
             guard let self else { return }
             MainActor.assumeIsolated {
                 // Single source of truth: always read from the player, every tick.
-                if let player = self.audioPlayer {
+                // Exception: when the silent loop is active, audioPlayer points at the
+                // 1-second silent WAV — do not overwrite currentTime with its position.
+                if let player = self.audioPlayer, !self.isSilentLoopActive {
                     self.currentTime = player.currentTime
                 }
                 if self.state != .withinFileMute {
@@ -972,7 +1001,10 @@ final class LongModePlaybackManager: NSObject, ObservableObject {
 
     private func stopAllTimers() {
         fader.cancel()
-        audioPlayer?.volume = 1.0
+        // Do NOT restore volume on the silent player — it would become audible.
+        if !isSilentLoopActive {
+            audioPlayer?.volume = 1.0
+        }
         stopProgressTimer()
         cancelCountdownTimer()
     }
@@ -1012,11 +1044,101 @@ final class LongModePlaybackManager: NSObject, ObservableObject {
         return results
     }
 
+    // MARK: - Silent Loop
+
+    /// Builds a 1-second, 22 050 Hz, 16-bit mono WAV of silence in the temp directory.
+    /// Called once at init; the file is reused across all silent-loop activations.
+    /// If the system clears the temp directory the file is simply recreated on next launch.
+    private static func createSilentAudioFile() -> URL? {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("com.audiosipper.silence.wav")
+
+        let sampleRate: Int32 = 22_050
+        let numSamples = Int(sampleRate)            // 1 second
+        let audioData = Data(repeating: 0, count: numSamples * 2)  // 16-bit = 2 bytes/sample
+
+        var header = Data()
+        func appendLE<T: FixedWidthInteger>(_ v: T) {
+            withUnsafeBytes(of: v.littleEndian) { header.append(contentsOf: $0) }
+        }
+
+        // RIFF header
+        header.append(contentsOf: "RIFF".utf8)
+        appendLE(UInt32(36 + audioData.count))   // file size minus 8
+        header.append(contentsOf: "WAVE".utf8)
+        // fmt chunk
+        header.append(contentsOf: "fmt ".utf8)
+        appendLE(UInt32(16))                     // chunk size
+        appendLE(UInt16(1))                      // PCM
+        appendLE(UInt16(1))                      // mono
+        appendLE(sampleRate)
+        appendLE(sampleRate * 2)                 // byte rate (rate * channels * bits/8)
+        appendLE(UInt16(2))                      // block align
+        appendLE(UInt16(16))                     // bits per sample
+        // data chunk
+        header.append(contentsOf: "data".utf8)
+        appendLE(UInt32(audioData.count))
+
+        var fileData = header
+        fileData.append(audioData)
+
+        do {
+            try fileData.write(to: url, options: .atomic)
+            return url
+        } catch {
+            print("[AudioSipper] createSilentAudioFile: failed — \(error)")
+            return nil
+        }
+    }
+
+    /// Replaces the current AVAudioPlayer with an infinitely-looping silent player,
+    /// keeping the iOS audio session alive without producing any audible signal.
+    ///
+    /// Saves the real file URL and position so `resumeAfterIntervalPause` can reload
+    /// from exactly where playback left off.
+    ///
+    /// Use this for Default-mode interval pauses and between-files waits.
+    /// Do NOT use for Continue-mode mutes (withinFileMute) — the real player must
+    /// stay active there so audioPlayerDidFinishPlaying fires when the track ends.
+    private func startSilentLoop() {
+        guard let silentURL = silentLoopFileURL else {
+            print("[AudioSipper] startSilentLoop: silent WAV unavailable — keeping real player")
+            return
+        }
+
+        // Snapshot real-audio state before replacing the player.
+        preSilenceFileURL = currentFileURL
+        preSilencePosition = audioPlayer?.currentTime ?? currentTime
+
+        // Nil the delegate before stopping — prevents a race where the real player
+        // fires audioPlayerDidFinishPlaying as we tear it down.
+        audioPlayer?.delegate = nil
+        audioPlayer?.stop()
+
+        do {
+            let silent = try AVAudioPlayer(contentsOf: silentURL)
+            silent.numberOfLoops = -1   // loop forever
+            silent.delegate = nil       // silent loop must never fire delegate callbacks
+            silent.prepareToPlay()
+            try? AVAudioSession.sharedInstance().setActive(true)
+            silent.play()
+            audioPlayer = silent
+            isSilentLoopActive = true
+            print("[AudioSipper] startSilentLoop: active — savedPos=\(String(format: "%.2f", preSilencePosition))s")
+        } catch {
+            print("[AudioSipper] startSilentLoop: FAILED — \(error)")
+            audioPlayer = nil
+            isSilentLoopActive = false
+        }
+    }
+
     // MARK: - Cleanup
 
     private func tearDown() {
         fader.cancel()
-        audioPlayer?.volume = 1.0
+        isSilentLoopActive = false
+        preSilenceFileURL = nil
+        audioPlayer?.delegate = nil
         audioPlayer?.stop()
         audioPlayer = nil
         currentFileURL = nil
@@ -1186,6 +1308,10 @@ extension LongModePlaybackManager: AVAudioPlayerDelegate {
             self.currentIndex += 1
 
             if self.currentIndex < self.playlist.count && self.betweenFilesPause > 0 {
+                // Start the silent loop so the audio session stays alive during the
+                // between-files wait. The saved URL/position from the finished track
+                // are never used (advanceOrFinish loads the next file directly).
+                self.startSilentLoop()
                 self.startCountdown(from: nil, type: .betweenFiles)
             } else {
                 self.advanceOrFinish()
