@@ -15,6 +15,7 @@
 		BF20AD702F685E8B0073283D /* FolderPickerRepresentable.swift in Sources */ = {isa = PBXBuildFile; fileRef = BF20AD6E2F685E8B0073283D /* FolderPickerRepresentable.swift */; };
 		BF20AD712F685E8B0073283D /* LongModePlaybackManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = BF20AD712F685E8B0073283E /* LongModePlaybackManager.swift */; };
 		BF20AD722F685E8B0073283D /* AudioFader.swift in Sources */ = {isa = PBXBuildFile; fileRef = BF20AD722F685E8B0073283E /* AudioFader.swift */; };
+		BF20AD732F685E8B0073283D /* silence.wav in Resources */ = {isa = PBXBuildFile; fileRef = BF20AD732F685E8B0073283E /* silence.wav */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -28,6 +29,7 @@
 		BF20AD6E2F685E8B0073283D /* FolderPickerRepresentable.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = FolderPickerRepresentable.swift; sourceTree = "<group>"; };
 		BF20AD712F685E8B0073283E /* LongModePlaybackManager.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = LongModePlaybackManager.swift; sourceTree = "<group>"; };
 		BF20AD722F685E8B0073283E /* AudioFader.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = AudioFader.swift; sourceTree = "<group>"; };
+		BF20AD732F685E8B0073283E /* silence.wav */ = {isa = PBXFileReference; lastKnownFileType = audio.wav; path = silence.wav; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -61,6 +63,7 @@
 			isa = PBXGroup;
 			children = (
 				BF20AD722F685E8B0073283E /* AudioFader.swift */,
+				BF20AD732F685E8B0073283E /* silence.wav */,
 				BF20AD6D2F685E8B0073283D /* AudioPlaybackManager.swift */,
 				BF20AD6E2F685E8B0073283D /* FolderPickerRepresentable.swift */,
 				BF20AD712F685E8B0073283E /* LongModePlaybackManager.swift */,
@@ -141,6 +144,7 @@
 			files = (
 				BF20AD672F685C8C0073283D /* Preview Assets.xcassets in Resources */,
 				BF20AD632F685C8C0073283D /* Assets.xcassets in Resources */,
+				BF20AD732F685E8B0073283D /* silence.wav in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

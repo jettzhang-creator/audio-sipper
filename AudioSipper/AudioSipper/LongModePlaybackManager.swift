@@ -117,6 +117,14 @@ final class LongModePlaybackManager: NSObject, ObservableObject {
 
     private let fader = AudioFader()
     private var audioPlayer: AVAudioPlayer?
+
+    /// Dedicated silent-loop player.  Runs a bundled 1-second zero-amplitude WAV
+    /// on infinite loop from session start to user-initiated stop.  Its sole purpose
+    /// is to keep the AVAudioSession active — and therefore background execution alive
+    /// — through silence intervals, track transitions, and user-pause states.
+    /// It is completely independent of `audioPlayer` and is never used for real audio.
+    private var silentLoopPlayer: AVAudioPlayer?
+    
     private var playlist: [URL] = []
     private var currentIndex: Int = 0
 
@@ -249,6 +257,9 @@ final class LongModePlaybackManager: NSObject, ObservableObject {
             // Reset initial offset for new track (Continue mode)
             isFirstMuteOfTrack = true
             initialOffsetBuffer = 0
+
+            // Ensure the background-keepalive silent loop is running for this session.
+            startSilentLoop()
 
             // Start playback
             print("[AudioSipper] PLAY CALLED for \(url.lastPathComponent)")
@@ -922,6 +933,7 @@ final class LongModePlaybackManager: NSObject, ObservableObject {
 
     private func tearDown() {
         fader.cancel()
+        stopSilentLoop()
         audioPlayer?.volume = 1.0
         audioPlayer?.stop()
         audioPlayer = nil
@@ -935,6 +947,34 @@ final class LongModePlaybackManager: NSObject, ObservableObject {
             url.stopAccessingSecurityScopedResource()
             activeFileURL = nil
         }
+    }
+
+    // MARK: - Silent Loop (background keepalive)
+
+    /// Starts the silent-loop player if it isn't already running.
+    /// Called once when a session begins; idempotent on subsequent track changes.
+    private func startSilentLoop() {
+        guard silentLoopPlayer == nil,
+              let url = Bundle.main.url(forResource: "silence", withExtension: "wav") else { return }
+        do {
+            let player = try AVAudioPlayer(contentsOf: url)
+            player.numberOfLoops = -1   // loop forever
+            player.volume = 1.0         // the file itself is zero-amplitude — no audible output
+            player.prepareToPlay()
+            player.play()
+            silentLoopPlayer = player
+            print("[AudioSipper] silentLoopPlayer: started")
+        } catch {
+            print("[AudioSipper] silentLoopPlayer: failed to start — \(error)")
+        }
+    }
+
+    /// Stops and releases the silent-loop player.
+    /// Called only when the user explicitly ends the session via `stop()`.
+    private func stopSilentLoop() {
+        silentLoopPlayer?.stop()
+        silentLoopPlayer = nil
+        print("[AudioSipper] silentLoopPlayer: stopped")
     }
 
     // MARK: - Audio Session
@@ -982,7 +1022,7 @@ final class LongModePlaybackManager: NSObject, ObservableObject {
         let isPlaying = (state == .playing || state == .withinFileMute)
         MPNowPlayingInfoCenter.default().nowPlayingInfo = [
             MPMediaItemPropertyTitle: currentFileName,
-            MPMediaItemPropertyArtist: "AudioSipper",
+            MPMediaItemPropertyArtist: sourceFolderName.isEmpty ? "AudioSipper" : sourceFolderName,
             MPNowPlayingInfoPropertyElapsedPlaybackTime: currentTime,
             MPMediaItemPropertyPlaybackDuration: duration,
             MPNowPlayingInfoPropertyPlaybackRate: isPlaying ? 1.0 : 0.0
