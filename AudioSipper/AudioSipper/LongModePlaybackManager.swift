@@ -2,6 +2,7 @@ import Foundation
 
 #if os(iOS)
 import AVFoundation
+import MediaPlayer
 import UIKit
 
 // MARK: - Long Mode Playback State
@@ -278,12 +279,18 @@ final class LongModePlaybackManager: NSObject, ObservableObject {
             isFirstMuteOfTrack = true
             initialOffsetBuffer = 0
 
+            // Reactivate the audio session immediately before playback starts.
+            // Required when the session may have been deactivated by an interruption
+            // or after an extended period of silence.
+            try? AVAudioSession.sharedInstance().setActive(true)
+
             // Start playback
             print("[AudioSipper] PLAY CALLED for \(url.lastPathComponent)")
             player.play()
             state = .playing
             print("[AudioSipper] STATE -> \(state)")
             startProgressTimer()
+            updateNowPlayingInfo()
 
             print("[AudioSipper] setupAudioAndPlay: playing \(url.lastPathComponent) from \(clampedSeek)s")
             return true
@@ -395,6 +402,7 @@ final class LongModePlaybackManager: NSObject, ObservableObject {
             stopProgressTimer()
             wasPlayingClipWhenPaused = true
             state = .paused
+            updateNowPlayingInfo()
 
         case .withinFileMute:
             // Continue mode mute — pause audio, cancel countdown, restore volume
@@ -405,17 +413,21 @@ final class LongModePlaybackManager: NSObject, ObservableObject {
             trackEndedDuringMute = false
             wasPlayingClipWhenPaused = true
             state = .paused
+            updateNowPlayingInfo()
 
         case .withinFilePause, .betweenFiles:
             cancelCountdownTimer()
             wasPlayingClipWhenPaused = false
             state = .paused
+            updateNowPlayingInfo()
 
         case .paused:
             if wasPlayingClipWhenPaused {
+                try? AVAudioSession.sharedInstance().setActive(true)
                 audioPlayer?.play()
                 startProgressTimer()
                 state = .playing
+                updateNowPlayingInfo()
             } else {
                 // Resume countdown
                 startCountdown(from: countdownSeconds, type: .withinFilePause)
@@ -461,6 +473,8 @@ final class LongModePlaybackManager: NSObject, ObservableObject {
         // task queue that could deliver a stale value on top of this write — the
         // next timer tick reads player.currentTime which will already be `clamped`.
         currentTime = clamped
+        // Update lock screen elapsed time to reflect the new position.
+        updateNowPlayingInfo()
         // Do NOT reset the interval timer on seek — per requirements
     }
 
@@ -487,6 +501,7 @@ final class LongModePlaybackManager: NSObject, ObservableObject {
         countdownSeconds = 0
         statusMessage = ""
         restoredFromSave = false
+        MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
 
         // 5. Reset internal flags
         wasPlayingClipWhenPaused = false
@@ -719,9 +734,11 @@ final class LongModePlaybackManager: NSObject, ObservableObject {
             if continueMode {
                 // Continue mode: fade out then mute, keep audio playing, keep progress timer.
                 // Fades are always active in Continue mode with asymmetric durations.
+                // Volume is set to 0.001, not 0.0 — iOS can revoke background execution when
+                // volume is exactly 0; near-silence keeps the audio session active.
                 fader.fadeOut(player: player, duration: continueFadeOutDuration) { [weak self] in
                     guard let self else { return }
-                    self.audioPlayer?.volume = 0.0
+                    self.audioPlayer?.volume = 0.001
                     self.startMuteCountdown()
                 }
             } else {
@@ -785,13 +802,15 @@ final class LongModePlaybackManager: NSObject, ObservableObject {
 
     private func resumeAfterIntervalPause() {
         guard let player = audioPlayer else { return }
-        // Ensure volume is restored (may be 0 if coming from initial offset buffer)
+        // Ensure volume is restored (may be 0.001 if coming from initial offset buffer)
         player.volume = 1.0
         lastWallClockTimestamp = CACurrentMediaTime()
         justStartedPlayback = true
+        try? AVAudioSession.sharedInstance().setActive(true)
         player.play()
         state = .playing
         startProgressTimer()
+        updateNowPlayingInfo()
     }
 
     // MARK: - Continue Mode (Mute Interval)
@@ -864,6 +883,7 @@ final class LongModePlaybackManager: NSObject, ObservableObject {
             lastWallClockTimestamp = CACurrentMediaTime()
             justStartedPlayback = true
             state = .playing
+            updateNowPlayingInfo()
             fader.fadeIn(player: player, duration: continueFadeInDuration) {
                 // Fade-in complete — nothing else needed, already in .playing state
             }
@@ -969,6 +989,46 @@ final class LongModePlaybackManager: NSObject, ObservableObject {
         } catch {
             print("[AudioSipper] AVAudioSession setup failed: \(error)")
         }
+
+        // Allow lock screen / Control Center transport controls to reach this app.
+        UIApplication.shared.beginReceivingRemoteControlEvents()
+
+        let commandCenter = MPRemoteCommandCenter.shared()
+
+        // Clear any previously registered handlers so re-init doesn't stack them.
+        commandCenter.playCommand.removeTarget(nil)
+        commandCenter.pauseCommand.removeTarget(nil)
+
+        commandCenter.playCommand.addTarget { [weak self] _ in
+            guard let self, self.state == .paused else { return .commandFailed }
+            self.togglePlayPause()
+            return .success
+        }
+
+        commandCenter.pauseCommand.addTarget { [weak self] _ in
+            guard let self,
+                  self.state == .playing || self.state == .withinFileMute else { return .commandFailed }
+            self.togglePlayPause()
+            return .success
+        }
+    }
+
+    // MARK: - Now Playing Info
+
+    /// Pushes current track and playback state to the lock screen / Control Center.
+    /// Call whenever the track, position, or play/pause state changes.
+    private func updateNowPlayingInfo() {
+        guard audioPlayer != nil else {
+            MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
+            return
+        }
+        let isActivelyPlaying = (state == .playing || state == .withinFileMute)
+        MPNowPlayingInfoCenter.default().nowPlayingInfo = [
+            MPMediaItemPropertyTitle: currentFileName,
+            MPNowPlayingInfoPropertyElapsedPlaybackTime: currentTime,
+            MPMediaItemPropertyPlaybackDuration: duration,
+            MPNowPlayingInfoPropertyPlaybackRate: isActivelyPlaying ? 1.0 : 0.0
+        ]
     }
 
     // MARK: - Interruption & Route Change Handling

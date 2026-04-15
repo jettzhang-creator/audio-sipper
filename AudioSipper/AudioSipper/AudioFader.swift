@@ -27,10 +27,12 @@ final class AudioFader {
 
     // MARK: - Public API
 
-    /// Fade the player's volume from its current level to 0 over `duration` seconds.
+    /// Fade the player's volume from its current level to near-silence over `duration` seconds.
+    /// Target is 0.001 (not 0.0): iOS treats exactly-zero volume as silent and can revoke
+    /// background execution. 0.001 is inaudible but keeps the audio session active.
     /// Calls `completion` when finished (or immediately if duration <= 0).
     func fadeOut(player: AVAudioPlayer, duration: TimeInterval = 0.2, completion: @escaping () -> Void) {
-        fade(player: player, to: 0.0, duration: duration, completion: completion)
+        fade(player: player, to: 0.001, duration: duration, completion: completion)
     }
 
     /// Fade the player's volume from its current level to 1 over `duration` seconds.
