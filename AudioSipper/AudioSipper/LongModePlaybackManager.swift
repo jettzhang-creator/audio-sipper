@@ -438,6 +438,53 @@ final class LongModePlaybackManager: NSObject, ObservableObject {
         }
     }
 
+    /// Dedicated resume method for remote-command handlers. Only acts when paused.
+    private func remotePlay() {
+        guard state == .paused else { return }
+        if wasPlayingClipWhenPaused {
+            try? AVAudioSession.sharedInstance().setActive(true)
+            audioPlayer?.play()
+            startProgressTimer()
+            state = .playing
+            updateNowPlayingInfo()
+        } else {
+            startCountdown(from: countdownSeconds, type: .withinFilePause)
+        }
+    }
+
+    /// Dedicated pause method for remote-command handlers. Only acts when audio is running.
+    private func remotePause() {
+        switch state {
+        case .playing:
+            if fader.isFading { fader.cancel(); audioPlayer?.volume = 1.0 }
+            audioPlayer?.pause()
+            stopProgressTimer()
+            wasPlayingClipWhenPaused = true
+            state = .paused
+            updateNowPlayingInfo()
+
+        case .withinFileMute:
+            if fader.isFading { fader.cancel(); audioPlayer?.volume = 1.0 }
+            cancelCountdownTimer()
+            audioPlayer?.pause()
+            audioPlayer?.volume = 1.0
+            stopProgressTimer()
+            trackEndedDuringMute = false
+            wasPlayingClipWhenPaused = true
+            state = .paused
+            updateNowPlayingInfo()
+
+        case .withinFilePause, .betweenFiles:
+            cancelCountdownTimer()
+            wasPlayingClipWhenPaused = false
+            state = .paused
+            updateNowPlayingInfo()
+
+        default:
+            break
+        }
+    }
+
     /// Previous: restart current file. If near the beginning (< 3s), go to previous file.
     func previous() {
         guard state == .playing || state == .paused || state == .withinFilePause
@@ -742,17 +789,19 @@ final class LongModePlaybackManager: NSObject, ObservableObject {
                     self.startMuteCountdown()
                 }
             } else {
-                // Default mode: pause audio
+                // Default mode: keep player running at near-silence and start
+                // the interval countdown. Do NOT call pause() — iOS revokes background
+                // execution when audio stops; volume 0.001 is inaudible but keeps the
+                // audio session active.
                 stopProgressTimer()
                 if fadeOutEnabled {
                     fader.fadeOut(player: player, duration: 0.5) { [weak self] in
                         guard let self else { return }
-                        self.audioPlayer?.pause()
-                        self.audioPlayer?.volume = 1.0
+                        self.audioPlayer?.volume = 0.001
                         self.startCountdown(from: nil, type: .withinFilePause)
                     }
                 } else {
-                    player.pause()
+                    player.volume = 0.001
                     startCountdown(from: nil, type: .withinFilePause)
                 }
             }
@@ -855,7 +904,9 @@ final class LongModePlaybackManager: NSObject, ObservableObject {
                     self.cancelCountdownTimer()
                     guard self.state == .withinFileMute else { return }
                     if self.initialOffsetBuffer > 0 {
-                        self.audioPlayer?.pause()
+                        // Keep player running at near-silence — do NOT call pause() here.
+                        // iOS revokes background execution when audio stops.
+                        self.audioPlayer?.volume = 0.001
                         self.stopProgressTimer()
                         self.startCountdown(from: self.initialOffsetBuffer, type: .withinFilePause)
                         self.initialOffsetBuffer = 0
@@ -1001,14 +1052,15 @@ final class LongModePlaybackManager: NSObject, ObservableObject {
 
         commandCenter.playCommand.addTarget { [weak self] _ in
             guard let self, self.state == .paused else { return .commandFailed }
-            self.togglePlayPause()
+            self.remotePlay()
             return .success
         }
 
         commandCenter.pauseCommand.addTarget { [weak self] _ in
-            guard let self,
-                  self.state == .playing || self.state == .withinFileMute else { return .commandFailed }
-            self.togglePlayPause()
+            guard let self else { return .commandFailed }
+            let pauseable: Set<LongPlaybackState> = [.playing, .withinFileMute, .withinFilePause, .betweenFiles]
+            guard pauseable.contains(self.state) else { return .commandFailed }
+            self.remotePause()
             return .success
         }
     }
@@ -1019,16 +1071,25 @@ final class LongModePlaybackManager: NSObject, ObservableObject {
     /// Call whenever the track, position, or play/pause state changes.
     private func updateNowPlayingInfo() {
         guard audioPlayer != nil else {
-            MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
+            DispatchQueue.main.async {
+                MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
+            }
             return
         }
-        let isActivelyPlaying = (state == .playing || state == .withinFileMute)
-        MPNowPlayingInfoCenter.default().nowPlayingInfo = [
+        // Use rate 0.0 only when truly paused by the user. During interval pauses,
+        // mute intervals, and between-files waits the audio session must stay "playing"
+        // (even at near-zero volume) so iOS does not revoke background execution.
+        let rate: Float = (state == .paused) ? 0.0 : 1.0
+        let info: [String: Any] = [
             MPMediaItemPropertyTitle: currentFileName,
+            MPMediaItemPropertyArtist: "AudioSipper",
             MPNowPlayingInfoPropertyElapsedPlaybackTime: currentTime,
             MPMediaItemPropertyPlaybackDuration: duration,
-            MPNowPlayingInfoPropertyPlaybackRate: isActivelyPlaying ? 1.0 : 0.0
+            MPNowPlayingInfoPropertyPlaybackRate: rate
         ]
+        DispatchQueue.main.async {
+            MPNowPlayingInfoCenter.default().nowPlayingInfo = info
+        }
     }
 
     // MARK: - Interruption & Route Change Handling
