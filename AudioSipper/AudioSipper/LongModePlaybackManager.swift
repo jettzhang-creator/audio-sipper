@@ -157,6 +157,9 @@ final class LongModePlaybackManager: NSObject, ObservableObject {
     private var activeFileURL: URL?
     private var wasPlayingClipWhenPaused: Bool = false
     private var justStartedPlayback: Bool = false
+    /// Records which countdown state was active when the user pressed pause.
+    /// Used to restore the correct countdown type on resume.
+    private var pausedCountdownType: LongPlaybackState = .withinFilePause
 
     // Continue mode: track ended during mute
     private var trackEndedDuringMute: Bool = false
@@ -250,6 +253,7 @@ final class LongModePlaybackManager: NSObject, ObservableObject {
 
             // Reset pause bookkeeping so togglePlayPause works correctly
             wasPlayingClipWhenPaused = true
+            pausedCountdownType = .withinFilePause
 
             // Prevent immediate interval pause on first progress tick
             justStartedPlayback = true
@@ -389,13 +393,16 @@ final class LongModePlaybackManager: NSObject, ObservableObject {
             audioPlayer?.volume = 1.0
             stopProgressTimer()
             trackEndedDuringMute = false
-            wasPlayingClipWhenPaused = true
+            wasPlayingClipWhenPaused = false   // resuming from .paused restarts the mute countdown, not the clip
+            pausedCountdownType = .withinFileMute
             state = .paused
             updateNowPlayingInfo()
 
         case .withinFilePause, .betweenFiles:
+            let prePauseState = state
             countdownTimer?.invalidate()
             countdownTimer = nil
+            pausedCountdownType = prePauseState
             wasPlayingClipWhenPaused = false
             state = .paused
             updateNowPlayingInfo()
@@ -406,9 +413,16 @@ final class LongModePlaybackManager: NSObject, ObservableObject {
                 startProgressTimer()
                 state = .playing
                 updateNowPlayingInfo()
+            } else if pausedCountdownType == .withinFileMute {
+                // Resuming from a Continue mode mute: restart audio at vol 0
+                // and re-enter the mute countdown for the remaining time.
+                audioPlayer?.volume = 0.0
+                audioPlayer?.play()
+                startProgressTimer()
+                startMuteCountdown(override: countdownSeconds)
             } else {
-                // Resume countdown
-                startCountdown(from: countdownSeconds, type: .withinFilePause)
+                // Resume a pause or between-files countdown
+                startCountdown(from: countdownSeconds, type: pausedCountdownType)
             }
 
         default:
@@ -481,6 +495,7 @@ final class LongModePlaybackManager: NSObject, ObservableObject {
 
         // 5. Reset internal flags
         wasPlayingClipWhenPaused = false
+        pausedCountdownType = .withinFilePause
         justStartedPlayback = false
         trackEndedDuringMute = false
         isFirstMuteOfTrack = true
@@ -750,6 +765,12 @@ final class LongModePlaybackManager: NSObject, ObservableObject {
 
         countdownSeconds = total
         state = type
+        // Push the correct PlaybackRate (0.0) to the lock screen immediately when
+        // silence begins.  Without this, the lock screen keeps the previous rate
+        // (1.0) and extrapolates time forward past the real paused position — causing
+        // the "seeks far ahead, then snaps back" effect when silence ends.
+        updateNowPlayingInfo()
+        print("[AudioSipper] Silence START — type=\(type) duration=\(total)s playerTime=\(audioPlayer?.currentTime ?? -1)")
         countdownTimer?.invalidate()
 
         countdownTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] timer in
@@ -790,10 +811,14 @@ final class LongModePlaybackManager: NSObject, ObservableObject {
 
     /// Starts a mute countdown. Audio keeps playing at volume 0.
     /// The progress timer stays active so the seek bar updates.
-    private func startMuteCountdown() {
+    /// - Parameter override: When non-nil, skips duration calculation and uses this value directly
+    ///   (used when resuming a previously user-paused mute interval).
+    private func startMuteCountdown(override seconds: Int? = nil) {
         let total: Int
 
-        if isFirstMuteOfTrack && initialOffsetEnabled && continueMode {
+        if let s = seconds {
+            total = s
+        } else if isFirstMuteOfTrack && initialOffsetEnabled && continueMode {
             // Initial Offset: random first mute between 1 and average mute duration.
             // After this mute, a buffer phase fills the remainder to reach the average.
             let avgMute = max(1, (minPauseDuration + maxPauseDuration) / 2)
@@ -816,6 +841,10 @@ final class LongModePlaybackManager: NSObject, ObservableObject {
         countdownSeconds = total
         trackEndedDuringMute = false
         state = .withinFileMute
+        // Push PlaybackRate 1.0 (audio is still running, just silent) to the lock screen
+        // immediately so iOS doesn't grey out the transport controls during mute intervals.
+        updateNowPlayingInfo()
+        print("[AudioSipper] Silence START — type=withinFileMute duration=\(total)s playerTime=\(audioPlayer?.currentTime ?? -1)")
         countdownTimer?.invalidate()
 
         countdownTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] timer in
@@ -997,7 +1026,14 @@ final class LongModePlaybackManager: NSObject, ObservableObject {
         commandCenter.pauseCommand.removeTarget(nil)
 
         commandCenter.playCommand.addTarget { [weak self] _ in
-            guard let self, self.state == .paused else { return .commandFailed }
+            guard let self else { return .commandFailed }
+            // During automatic silence intervals the session is still "playing" from the
+            // user's perspective — return .success so the lock screen button stays active,
+            // but don't call togglePlayPause() (nothing to resume yet).
+            if self.state == .withinFilePause || self.state == .withinFileMute || self.state == .betweenFiles {
+                return .success
+            }
+            guard self.state == .paused else { return .commandFailed }
             self.togglePlayPause()
             return .success
         }
@@ -1019,13 +1055,12 @@ final class LongModePlaybackManager: NSObject, ObservableObject {
             MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
             return
         }
-        let isPlaying = (state == .playing || state == .withinFileMute)
         MPNowPlayingInfoCenter.default().nowPlayingInfo = [
             MPMediaItemPropertyTitle: currentFileName,
             MPMediaItemPropertyArtist: sourceFolderName.isEmpty ? "AudioSipper" : sourceFolderName,
-            MPNowPlayingInfoPropertyElapsedPlaybackTime: currentTime,
+            MPNowPlayingInfoPropertyElapsedPlaybackTime: audioPlayer?.currentTime ?? currentTime,
             MPMediaItemPropertyPlaybackDuration: duration,
-            MPNowPlayingInfoPropertyPlaybackRate: isPlaying ? 1.0 : 0.0
+            MPNowPlayingInfoPropertyPlaybackRate: (audioPlayer?.isPlaying == true) ? 1.0 : 0.0
         ]
     }
 }
