@@ -16,6 +16,7 @@
 		BF20AD712F685E8B0073283D /* LongModePlaybackManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = BF20AD712F685E8B0073283E /* LongModePlaybackManager.swift */; };
 		BF20AD722F685E8B0073283D /* AudioFader.swift in Sources */ = {isa = PBXBuildFile; fileRef = BF20AD722F685E8B0073283E /* AudioFader.swift */; };
 		BF20AD732F685E8B0073283D /* silence.wav in Resources */ = {isa = PBXBuildFile; fileRef = BF20AD732F685E8B0073283E /* silence.wav */; };
+		BF20AD742F685E8B0073283D /* SleepTimerManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = BF20AD742F685E8B0073283E /* SleepTimerManager.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -31,6 +32,7 @@
 		BF20AD712F685E8B0073283E /* LongModePlaybackManager.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = LongModePlaybackManager.swift; sourceTree = "<group>"; };
 		BF20AD722F685E8B0073283E /* AudioFader.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = AudioFader.swift; sourceTree = "<group>"; };
 		BF20AD732F685E8B0073283E /* silence.wav */ = {isa = PBXFileReference; lastKnownFileType = audio.wav; path = silence.wav; sourceTree = "<group>"; };
+		BF20AD742F685E8B0073283E /* SleepTimerManager.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = SleepTimerManager.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -69,6 +71,7 @@
 				BF20AD6D2F685E8B0073283D /* AudioPlaybackManager.swift */,
 				BF20AD6E2F685E8B0073283D /* FolderPickerRepresentable.swift */,
 				BF20AD712F685E8B0073283E /* LongModePlaybackManager.swift */,
+				BF20AD742F685E8B0073283E /* SleepTimerManager.swift */,
 				BF20AD5E2F685C8A0073283D /* AudioSipperApp.swift */,
 				BF20AD602F685C8A0073283D /* ContentView.swift */,
 				BF20AD622F685C8C0073283D /* Assets.xcassets */,
@@ -163,6 +166,7 @@
 				BF20AD6F2F685E8B0073283D /* AudioPlaybackManager.swift in Sources */,
 				BF20AD712F685E8B0073283D /* LongModePlaybackManager.swift in Sources */,
 				BF20AD722F685E8B0073283D /* AudioFader.swift in Sources */,
+				BF20AD742F685E8B0073283D /* SleepTimerManager.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

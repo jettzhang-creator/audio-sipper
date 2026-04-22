@@ -511,6 +511,48 @@ final class LongModePlaybackManager: NSObject, ObservableObject {
         sourceIncludeSubfolders = false
     }
 
+    /// Soft stop: pause audio and cancel any active pause/mute interval without
+    /// advancing the queue or clearing the current file. Called by the sleep timer.
+    func softStop() {
+        if fader.isFading {
+            fader.cancel()
+            audioPlayer?.volume = 1.0
+        }
+        switch state {
+        case .playing:
+            audioPlayer?.pause()
+            stopProgressTimer()
+            wasPlayingClipWhenPaused = true
+            state = .paused
+            updateNowPlayingInfo()
+        case .withinFileMute:
+            countdownTimer?.invalidate()
+            countdownTimer = nil
+            audioPlayer?.pause()
+            audioPlayer?.volume = 1.0
+            stopProgressTimer()
+            trackEndedDuringMute = false
+            wasPlayingClipWhenPaused = false
+            pausedCountdownType = .withinFileMute
+            state = .paused
+            updateNowPlayingInfo()
+        case .withinFilePause, .betweenFiles:
+            let prePauseState = state
+            countdownTimer?.invalidate()
+            countdownTimer = nil
+            pausedCountdownType = prePauseState
+            wasPlayingClipWhenPaused = false
+            state = .paused
+            updateNowPlayingInfo()
+        default:
+            break
+        }
+    }
+
+    /// When non-nil, called on the next natural track completion instead of advancing the queue.
+    /// Set by the view when the sleep timer enters End of Track mode; cleared on first use.
+    var sleepTimerEndOfTrackFire: (() -> Void)?
+
     // MARK: - Save / Restore
 
     /// Saves current playback position to persistent storage.
@@ -879,6 +921,14 @@ final class LongModePlaybackManager: NSObject, ObservableObject {
             // (between-files wait was already absorbed by the mute; see delegate)
             trackEndedDuringMute = false
             audioPlayer?.volume = 1.0
+
+            // Sleep timer End of Track: notify timer instead of advancing.
+            if let handler = sleepTimerEndOfTrackFire {
+                sleepTimerEndOfTrackFire = nil
+                handler()
+                return
+            }
+
             currentIndex += 1
             advanceOrFinish()
         } else if let player = audioPlayer {
@@ -1094,6 +1144,14 @@ extension LongModePlaybackManager: AVAudioPlayerDelegate {
 
             // Cancel every in-flight timer/fader before scheduling a new one.
             self.stopAllTimers()
+
+            // Sleep timer End of Track: notify timer instead of advancing.
+            if let handler = self.sleepTimerEndOfTrackFire {
+                self.sleepTimerEndOfTrackFire = nil
+                handler()
+                return
+            }
+
             self.currentIndex += 1
 
             if self.currentIndex < self.playlist.count && self.betweenFilesPause > 0 {

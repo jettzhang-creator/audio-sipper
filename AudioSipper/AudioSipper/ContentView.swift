@@ -29,6 +29,8 @@ enum LongModeSubMode: String, CaseIterable {
 struct ContentView: View {
 
     @AppStorage("appMode") private var appMode: AppMode = .short
+    @StateObject private var sleepTimer = SleepTimerManager()
+    @State private var showTimerPicker = false
 
     var body: some View {
         ScrollView {
@@ -39,30 +41,88 @@ struct ContentView: View {
 
                 switch appMode {
                 case .short:
-                    ShortModeView()
+                    ShortModeView(sleepTimer: sleepTimer)
                 case .long:
-                    LongModeView()
+                    LongModeView(sleepTimer: sleepTimer)
                 }
             }
             .padding(.horizontal, 20)
             .padding(.vertical, 24)
         }
         .background(Color(UIColor.systemBackground).ignoresSafeArea())
+        .confirmationDialog(
+            sleepTimer.isActive ? "Sleep Timer (replace or cancel)" : "Sleep Timer",
+            isPresented: $showTimerPicker,
+            titleVisibility: .visible
+        ) {
+            Button("5 min") { sleepTimer.set(.minutes(5)) }
+            Button("10 min") { sleepTimer.set(.minutes(10)) }
+            Button("15 min") { sleepTimer.set(.minutes(15)) }
+            Button("25 min") { sleepTimer.set(.minutes(25)) }
+            Button("30 min") { sleepTimer.set(.minutes(30)) }
+            Button("45 min") { sleepTimer.set(.minutes(45)) }
+            Button("1 hour") { sleepTimer.set(.minutes(60)) }
+            Button("End of Track") { sleepTimer.set(.endOfTrack) }
+            if sleepTimer.isActive {
+                Button("Cancel Timer", role: .destructive) { sleepTimer.cancel() }
+            }
+            Button("Dismiss", role: .cancel) { }
+        }
     }
 
     // MARK: Header
 
     private var headerSection: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text("Audio Sipper")
-                .font(.largeTitle.bold())
-                .foregroundColor(.primary)
-            Text("Local clip shuffler \u{00B7} no accounts \u{00B7} no cloud")
-                .font(.subheadline)
-                .foregroundColor(.secondary)
+        HStack(alignment: .top) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Audio Sipper")
+                    .font(.largeTitle.bold())
+                    .foregroundColor(.primary)
+                Text("Local clip shuffler \u{00B7} no accounts \u{00B7} no cloud")
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+            }
+            .accessibilityElement(children: .combine)
+            .accessibilityHeading(.h1)
+
+            Spacer()
+
+            sleepTimerButton
         }
-        .accessibilityElement(children: .combine)
-        .accessibilityHeading(.h1)
+    }
+
+    private var sleepTimerButton: some View {
+        Button {
+            showTimerPicker = true
+        } label: {
+            HStack(spacing: 5) {
+                Image(systemName: "moon.zzz.fill")
+                    .font(.title3)
+                if sleepTimer.isActive && !sleepTimer.isEndOfTrack {
+                    Text(sleepTimer.formattedRemaining)
+                        .font(.body.monospacedDigit())
+                        .animation(nil, value: sleepTimer.remainingSeconds)
+                }
+            }
+            .foregroundColor(sleepTimer.isActive ? Color(UIColor.systemYellow) : Color(UIColor.secondaryLabel))
+            .padding(.horizontal, sleepTimer.isActive && !sleepTimer.isEndOfTrack ? 10 : 6)
+            .padding(.vertical, 6)
+            .background(
+                sleepTimer.isActive
+                    ? Color(UIColor.systemYellow).opacity(0.15)
+                    : Color(UIColor.secondarySystemBackground)
+            )
+            .cornerRadius(10)
+        }
+        .accessibilityLabel(sleepTimerAccessibilityLabel)
+        .accessibilityHint("Double-tap to set or change sleep timer")
+        .padding(.top, 4)
+    }
+
+    private var sleepTimerAccessibilityLabel: String {
+        if !sleepTimer.isActive { return "Sleep timer: off" }
+        if sleepTimer.isEndOfTrack { return "Sleep timer: end of track" }
+        return "Sleep timer: \(sleepTimer.formattedRemaining) remaining"
     }
 
     // MARK: Mode Toggle
@@ -89,6 +149,7 @@ struct ContentView: View {
 
 struct ShortModeView: View {
 
+    @ObservedObject var sleepTimer: SleepTimerManager
     @StateObject private var player = AudioPlaybackManager()
 
     // Folder selection
@@ -163,6 +224,18 @@ struct ShortModeView: View {
                 showFolderPicker = false
             })
             .preferredColorScheme(.dark)
+        }
+        .onAppear {
+            let p = player
+            sleepTimer.onExpire = { p.softStop() }
+        }
+        .onChange(of: sleepTimer.isEndOfTrack) {
+            player.sleepTimerEndOfTrackFire = (sleepTimer.isEndOfTrack && sleepTimer.isActive)
+                ? { [weak sleepTimer] in sleepTimer?.notifyTrackEnded() }
+                : nil
+        }
+        .onChange(of: sleepTimer.isActive) {
+            if !sleepTimer.isActive { player.sleepTimerEndOfTrackFire = nil }
         }
     }
 
@@ -369,6 +442,7 @@ struct ShortModeView: View {
 
 struct LongModeView: View {
 
+    @ObservedObject var sleepTimer: SleepTimerManager
     @StateObject private var player = LongModePlaybackManager()
 
     // Source selection
@@ -457,7 +531,19 @@ struct LongModeView: View {
                 .animation(.default, value: player.currentFileName)
                 .animation(.default, value: player.countdownSeconds)
         }
-        .onAppear { restoreSavedSession() }
+        .onAppear {
+            restoreSavedSession()
+            let p = player
+            sleepTimer.onExpire = { p.softStop() }
+        }
+        .onChange(of: sleepTimer.isEndOfTrack) {
+            player.sleepTimerEndOfTrackFire = (sleepTimer.isEndOfTrack && sleepTimer.isActive)
+                ? { [weak sleepTimer] in sleepTimer?.notifyTrackEnded() }
+                : nil
+        }
+        .onChange(of: sleepTimer.isActive) {
+            if !sleepTimer.isActive { player.sleepTimerEndOfTrackFire = nil }
+        }
         .toolbar {
             ToolbarItemGroup(placement: .keyboard) {
                 Spacer()

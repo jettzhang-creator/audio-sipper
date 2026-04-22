@@ -125,6 +125,28 @@ final class AudioPlaybackManager: NSObject, ObservableObject {
         statusMessage = ""
     }
 
+    /// Soft stop: pause audio and cancel any active countdown without advancing the queue.
+    /// Keeps currentFileName and position so the user can resume. Called by the sleep timer.
+    func softStop() {
+        switch state {
+        case .playing:
+            audioPlayer?.pause()
+            wasPlayingClipWhenPaused = true
+            state = .paused
+        case .countdown:
+            countdownTimer?.invalidate()
+            countdownTimer = nil
+            wasPlayingClipWhenPaused = false
+            state = .paused
+        default:
+            break
+        }
+    }
+
+    /// When non-nil, called on the next natural track completion instead of advancing the queue.
+    /// Set by the view when the sleep timer enters End of Track mode; cleared on first use.
+    var sleepTimerEndOfTrackFire: (() -> Void)?
+
     // MARK: - Private Playback
 
     private func playCurrentClip() {
@@ -246,6 +268,11 @@ extension AudioPlaybackManager: AVAudioPlayerDelegate {
     nonisolated func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
         Task { @MainActor [weak self] in
             guard let self, self.state == .playing else { return }
+            if let handler = self.sleepTimerEndOfTrackFire {
+                self.sleepTimerEndOfTrackFire = nil
+                handler()
+                return
+            }
             self.startCountdown()
         }
     }
